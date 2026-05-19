@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: auth-service-config
+  namespace: convertx
+data:
+  DB_HOST: postgres.convertx.svc.cluster.local:5432
+  DB_NAME: convertx_db
+  DB_USER: convertx
+  REDIS_HOST: redis.kong.svc.cluster.local:6379
+  PORT: "8080"

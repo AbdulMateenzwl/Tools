@@ -1,13 +1,4 @@
 apiVersion: gateway.networking.k8s.io/v1
-kind: GatewayClass
-metadata:
-  name: kong
-  namespace: kong
-spec:
-  controllerName: konghq.com/gateway-operator
-
----
-apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
   name: convertx-gateway
@@ -18,9 +9,15 @@ spec:
     - name: http
       protocol: HTTP
       port: 80
+      allowedRoutes:
+        namespaces:
+          from: All
     - name: https
       protocol: HTTPS
       port: 443
+      allowedRoutes:
+        namespaces:
+          from: All
       tls:
         mode: Terminate
         certificateRefs:
