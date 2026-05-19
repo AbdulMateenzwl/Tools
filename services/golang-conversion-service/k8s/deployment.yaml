@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: conversion-service
+  namespace: convertx
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: conversion-service
+  template:
+    metadata:
+      labels:
+        app: conversion-service
+    spec:
+      containers:
+        - name: conversion-service
+          image: convertx/conversion-service:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: conversion-service-config
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: redis-secret
+                  key: password
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "64Mi"
+            limits:
+              cpu: "500m"
+              memory: "128Mi"
+          livenessProbe:
+            httpGet:
+              path: /api/v1/convert/health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /api/v1/convert/health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 5

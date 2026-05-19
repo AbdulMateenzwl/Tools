@@ -1,0 +1,24 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: conversion-service-route
+  namespace: convertx
+spec:
+  parentRefs:
+    - name: convertx-gateway
+      namespace: kong
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api/v1/convert
+      backendRefs:
+        - name: conversion-service
+          port: 8080
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api/v1/tools
+      backendRefs:
+        - name: conversion-service
+          port: 8080
