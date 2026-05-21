@@ -1,0 +1,21 @@
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: rate-limiting-anonymous
+  namespace: convertx
+plugin: rate-limiting
+config:
+  day: 20
+  policy: redis
+  redis:
+    host: redis.kong.svc.cluster.local
+    port: 6379
+    password: yourpassword
+    database: 1
+    timeout: 2000
+  limit_by: ip
+  fault_tolerant: true
+  hide_client_headers: false
+  error_code: 429
+  error_message: "Rate limit exceeded. Please register for higher limits."
+  sync_rate: -1

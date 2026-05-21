@@ -1,0 +1,106 @@
+apiVersion: configuration.konghq.com/v1alpha1
+kind: KongPluginBinding
+metadata:
+  name: conversion-cors-binding
+  namespace: convertx
+spec:
+  controlPlaneRef:
+    type: kic
+  pluginRef:
+    name: cors
+    kind: KongPlugin
+  targets:
+    routeRef:
+      group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: conversion-service-route
+
+---
+apiVersion: configuration.konghq.com/v1alpha1
+kind: KongPluginBinding
+metadata:
+  name: conversion-rate-limiting-binding
+  namespace: convertx
+spec:
+  controlPlaneRef:
+    type: kic
+  pluginRef:
+    name: rate-limiting-anonymous
+    kind: KongPlugin
+  targets:
+    routeRef:
+      group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: conversion-service-route
+
+---
+apiVersion: configuration.konghq.com/v1alpha1
+kind: KongPluginBinding
+metadata:
+  name: conversion-size-binding
+  namespace: convertx
+spec:
+  controlPlaneRef:
+    type: kic
+  pluginRef:
+    name: request-size-limiting
+    kind: KongPlugin
+  targets:
+    routeRef:
+      group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: conversion-service-route
+
+---
+apiVersion: configuration.konghq.com/v1alpha1
+kind: KongPluginBinding
+metadata:
+  name: conversion-headers-binding
+  namespace: convertx
+spec:
+  controlPlaneRef:
+    type: kic
+  pluginRef:
+    name: response-headers
+    kind: KongPlugin
+  targets:
+    routeRef:
+      group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: conversion-service-route
+
+---
+apiVersion: configuration.konghq.com/v1alpha1
+kind: KongPluginBinding
+metadata:
+  name: conversion-request-id-binding
+  namespace: convertx
+spec:
+  controlPlaneRef:
+    type: kic
+  pluginRef:
+    name: request-id
+    kind: KongPlugin
+  targets:
+    routeRef:
+      group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: conversion-service-route
+
+---
+apiVersion: configuration.konghq.com/v1alpha1
+kind: KongPluginBinding
+metadata:
+  name: conversion-logging-binding
+  namespace: convertx
+spec:
+  controlPlaneRef:
+    type: kic
+  pluginRef:
+    name: request-logging
+    kind: KongPlugin
+  targets:
+    routeRef:
+      group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: conversion-service-route

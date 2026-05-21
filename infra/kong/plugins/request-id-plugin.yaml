@@ -1,0 +1,10 @@
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: request-id
+  namespace: convertx
+plugin: correlation-id
+config:
+  header_name: X-Request-ID
+  generator: uuid
+  echo_downstream: true

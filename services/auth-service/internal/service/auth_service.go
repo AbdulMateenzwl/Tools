@@ -75,9 +75,7 @@ func (s *AuthService) Login(ctx context.Context, req *model.LoginRequest) (*mode
     return s.generateTokenPair(ctx, user)
 }
 
-// RefreshToken issues a new access token from a valid refresh token
 func (s *AuthService) RefreshToken(ctx context.Context, refreshToken string) (*model.TokenResponse, error) {
-    // Look up refresh token in Redis
     userID, err := s.redis.Get(ctx, "refresh:"+refreshToken).Result()
     if err != nil {
         return nil, ErrInvalidToken
@@ -88,8 +86,9 @@ func (s *AuthService) RefreshToken(ctx context.Context, refreshToken string) (*m
         return nil, ErrInvalidToken
     }
 
-    // Delete old refresh token
+    // Delete old refresh token and remove from tracking set
     s.redis.Del(ctx, "refresh:"+refreshToken)
+    s.redis.SRem(ctx, "user_tokens:"+userID, refreshToken)
 
     return s.generateTokenPair(ctx, user)
 }
@@ -118,29 +117,49 @@ func (s *AuthService) GenerateAPIKey(ctx context.Context, userID string) (*model
     return &model.APIKeyResponse{APIKey: apiKey}, nil
 }
 
-// generateTokenPair creates access + refresh token pair
+const maxRefreshTokensPerUser = 5
+
 func (s *AuthService) generateTokenPair(ctx context.Context, user *model.User) (*model.TokenResponse, error) {
     secret := os.Getenv("JWT_SECRET")
 
     // Access token — 15 minutes
     accessClaims := jwt.MapClaims{
-        "sub":  user.ID,
+        "sub":   user.ID,
         "email": user.Email,
-        "role": user.Role,
-        "iss":  user.ID,
-        "exp":  time.Now().Add(15 * time.Minute).Unix(),
-        "iat":  time.Now().Unix(),
+        "role":  user.Role,
+        "iss":   user.ID,
+        "exp":   time.Now().Add(15 * time.Minute).Unix(),
+        "iat":   time.Now().Unix(),
     }
     accessToken, err := jwt.NewWithClaims(jwt.SigningMethodHS256, accessClaims).SignedString([]byte(secret))
     if err != nil {
         return nil, fmt.Errorf("sign access token: %w", err)
     }
 
-    // Refresh token — 7 days, stored in Redis
+    // Enforce max refresh tokens per user
+    // Track all refresh token keys for this user in a Redis Set
+    userTokensKey := "user_tokens:" + user.ID
+
+    // Count existing tokens
+    count, err := s.redis.SCard(ctx, userTokensKey).Result()
+    if err == nil && count >= maxRefreshTokensPerUser {
+        // Get oldest tokens and delete them
+        members, _ := s.redis.SMembers(ctx, userTokensKey).Result()
+        // Delete oldest until we are under the limit
+        for len(members) >= maxRefreshTokensPerUser {
+            oldest := members[0]
+            members = members[1:]
+            s.redis.Del(ctx, "refresh:"+oldest)
+            s.redis.SRem(ctx, userTokensKey, oldest)
+        }
+    }
+
+    // Generate new refresh token
     refreshRaw := make([]byte, 32)
     rand.Read(refreshRaw)
     refreshToken := hex.EncodeToString(refreshRaw)
 
+    // Store refresh token value → userID
     err = s.redis.Set(ctx,
         "refresh:"+refreshToken,
         user.ID,
@@ -150,9 +169,13 @@ func (s *AuthService) generateTokenPair(ctx context.Context, user *model.User) (
         return nil, fmt.Errorf("store refresh token: %w", err)
     }
 
+    // Track this token in user's set
+    s.redis.SAdd(ctx, userTokensKey, refreshToken)
+    s.redis.Expire(ctx, userTokensKey, 7*24*time.Hour)
+
     return &model.TokenResponse{
         AccessToken:  accessToken,
         RefreshToken: refreshToken,
-        ExpiresIn:    900, // 15 minutes in seconds
+        ExpiresIn:    900,
     }, nil
 }

@@ -3,6 +3,8 @@ kind: HTTPRoute
 metadata:
   name: auth-service-route
   namespace: convertx
+  annotations:
+    konghq.com/plugins: cors,rate-limiting-anonymous,request-size-limiting,response-headers,request-id,request-logging
 spec:
   parentRefs:
     - name: convertx-gateway

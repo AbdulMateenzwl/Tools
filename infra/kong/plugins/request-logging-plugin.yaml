@@ -1,0 +1,9 @@
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: request-logging
+  namespace: convertx
+plugin: file-log
+config:
+  path: /dev/stdout
+  reopen: false

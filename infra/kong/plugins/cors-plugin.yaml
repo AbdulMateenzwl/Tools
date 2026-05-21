@@ -1,0 +1,31 @@
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: cors
+  namespace: convertx
+plugin: cors
+config:
+  origins:
+    - "http://localhost:4200"
+    - "http://localhost:3000"
+    - "https://convertx.io"
+  methods:
+    - GET
+    - POST
+    - PUT
+    - DELETE
+    - OPTIONS
+    - PATCH
+  headers:
+    - Authorization
+    - Content-Type
+    - X-API-Key
+    - X-Request-ID
+  exposed_headers:
+    - X-RateLimit-Remaining
+    - X-RateLimit-Limit
+    - X-RateLimit-Reset
+    - X-Request-ID
+  credentials: true
+  max_age: 3600
+  preflight_continue: false

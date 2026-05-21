@@ -1,0 +1,18 @@
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: response-headers
+  namespace: convertx
+plugin: response-transformer
+config:
+  add:
+    headers:
+      - "X-Content-Type-Options:nosniff"
+      - "X-Frame-Options:DENY"
+      - "X-XSS-Protection:1; mode=block"
+      - "Referrer-Policy:strict-origin-when-cross-origin"
+      - "Permissions-Policy:geolocation=(), microphone=(), camera=()"
+  remove:
+    headers:
+      - "X-Powered-By"
+      - "Server"
