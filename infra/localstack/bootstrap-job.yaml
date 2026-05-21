@@ -1,0 +1,38 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: localstack-bootstrap
+  namespace: localstack
+spec:
+  template:
+    spec:
+      restartPolicy: OnFailure
+      initContainers:
+        - name: wait-for-localstack
+          image: curlimages/curl:8.6.0
+          command:
+            - sh
+            - -c
+            - |
+              until curl -sf http://localstack.localstack.svc.cluster.local:4566/_localstack/health; do
+                echo "Waiting for LocalStack..."; sleep 5
+              done
+      containers:
+        - name: bootstrap
+          image: amazon/aws-cli:2.15.30
+          command: ["bash", "/scripts/bootstrap.sh"]
+          env:
+            - name: REDIS_PASSWORD
+              value: "REDIS_PWD_PLACEHOLDER"
+            - name: POSTGRES_PASSWORD
+              value: "POSTGRES_PWD_PLACEHOLDER"
+            - name: JWT_SECRET
+              value: "JWT_SECRET_PLACEHOLDER"
+          volumeMounts:
+            - name: bootstrap-script
+              mountPath: /scripts
+      volumes:
+        - name: bootstrap-script
+          configMap:
+            name: localstack-bootstrap
+            defaultMode: 0755

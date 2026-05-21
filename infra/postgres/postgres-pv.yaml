@@ -8,7 +8,7 @@ spec:
   accessModes:
     - ReadWriteOnce
   persistentVolumeReclaimPolicy: Retain
-  storageClassName: ""                    # ← add this
+  storageClassName: "manual"
   hostPath:
     path: /var/lib/convertx/postgres
     type: DirectoryOrCreate

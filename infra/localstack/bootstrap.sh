@@ -2,7 +2,7 @@
 
 set -e
 
-LOCALSTACK_URL="http://localhost:4566"
+LOCALSTACK_URL="${LOCALSTACK_URL:-http://localstack.localstack.svc.cluster.local:4566}"
 REGION="us-east-1"
 
 # AWS CLI v1 syntax — no inline credentials, use env vars instead
@@ -14,16 +14,19 @@ AWS="aws --endpoint-url=$LOCALSTACK_URL"
 
 echo "=== ConvertX LocalStack Bootstrap ==="
 
+REDIS_PASS="${REDIS_PASSWORD:-yourpassword}"
+POSTGRES_PASS="${POSTGRES_PASSWORD:-yourpassword}"
+
 # ─── SecretsManager ───────────────────────────────────────────
 
 echo "Creating secrets in SecretsManager..."
 
 $AWS secretsmanager create-secret \
   --name "convertx/redis/password" \
-  --secret-string "yourpassword" 2>/dev/null || \
+  --secret-string "$REDIS_PASS" 2>/dev/null || \
 $AWS secretsmanager update-secret \
   --secret-id "convertx/redis/password" \
-  --secret-string "yourpassword"
+  --secret-string "$REDIS_PASS"
 echo "  ✓ convertx/redis/password"
 
 $AWS secretsmanager create-secret \
@@ -36,13 +39,13 @@ echo "  ✓ convertx/postgres/username"
 
 $AWS secretsmanager create-secret \
   --name "convertx/postgres/password" \
-  --secret-string "yourpassword" 2>/dev/null || \
+  --secret-string "$POSTGRES_PASS" 2>/dev/null || \
 $AWS secretsmanager update-secret \
   --secret-id "convertx/postgres/password" \
-  --secret-string "yourpassword"
+  --secret-string "$POSTGRES_PASS"
 echo "  ✓ convertx/postgres/password"
 
-JWT_SECRET=$(openssl rand -hex 32)
+JWT_SECRET="${JWT_SECRET:-$(openssl rand -hex 32 2>/dev/null || od -An -tx1 -N32 /dev/urandom | tr -d ' \n')}"
 $AWS secretsmanager create-secret \
   --name "convertx/auth/jwt_secret" \
   --secret-string "$JWT_SECRET" 2>/dev/null || \

@@ -21,7 +21,18 @@ spec:
             - containerPort: 8080
           envFrom:
             - configMapRef:
-                name: auth-service-config  # all config + AWS creds here
+                name: auth-service-config
+          env:
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: password
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: redis-secret
+                  key: password
           resources:
             requests:
               cpu: "100m"

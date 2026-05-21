@@ -6,7 +6,7 @@ metadata:
 spec:
   accessModes:
     - ReadWriteOnce
-  storageClassName: ""                    # ← add this
+  storageClassName: "manual"
   resources:
     requests:
       storage: 10Gi
