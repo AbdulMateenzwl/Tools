@@ -9,3 +9,7 @@ data:
   DB_USER: convertx
   REDIS_HOST: redis.kong.svc.cluster.local:6379
   PORT: "8080"
+  AWS_REGION: "us-east-1"
+  AWS_ENDPOINT_URL: "http://localstack.localstack.svc.cluster.local:4566"
+  AWS_ACCESS_KEY_ID: "test"
+  AWS_SECRET_ACCESS_KEY: "test"

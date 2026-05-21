@@ -1,0 +1,31 @@
+# Binaries
+services/auth-service/auth-service
+services/golang-conversion-service/conversion-service
+
+# Go
+*.exe
+*.test
+*.out
+vendor/
+
+# Docker
+.docker/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets — never commit real values
+*.env
+.env.*
+secrets.sh
+infra/secrets-actual.sh
+
+# Logs
+*.log

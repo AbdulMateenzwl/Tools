@@ -1,4 +1,13 @@
 apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: kong
+  namespace: kong
+spec:
+  controllerName: konghq.com/gateway-operator
+
+---
+apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
   name: convertx-gateway

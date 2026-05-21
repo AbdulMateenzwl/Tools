@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: localstack-config
+  namespace: localstack
+data:
+  SERVICES: "s3,sqs,secretsmanager,ecr"   # only enable what we need
+  DEBUG: "0"
+  DEFAULT_REGION: "us-east-1"
+  PERSISTENCE: "0"                          # dev only, no persistence needed
+  EAGER_SERVICE_LOADING: "1"               # start all services immediately on boot

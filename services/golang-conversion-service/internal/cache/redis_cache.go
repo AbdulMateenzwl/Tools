@@ -1,39 +1,52 @@
 package cache
 
 import (
-    "context"
-    "crypto/sha256"
-    "fmt"
-    "time"
+	"context"
+	"crypto/sha256"
+	"fmt"
+	"os"
+	"strconv"
+	"time"
 
-    "github.com/redis/go-redis/v9"
+	"github.com/redis/go-redis/v9"
 )
 
-const ttl = 1 * time.Hour
-
 type RedisCache struct {
-    client *redis.Client
+	client *redis.Client
+	ttl    time.Duration
 }
 
 func NewRedisCache(client *redis.Client) *RedisCache {
-    return &RedisCache{client: client}
+	ttl := parseTTL()
+	return &RedisCache{client: client, ttl: ttl}
 }
 
-// Key generates a cache key from the operation name and input
+// parseTTL reads CACHE_TTL_MINUTES from env, defaults to 60
+func parseTTL() time.Duration {
+	val := os.Getenv("CACHE_TTL_MINUTES")
+	if val == "" {
+		return 60 * time.Minute
+	}
+	minutes, err := strconv.Atoi(val)
+	if err != nil || minutes <= 0 {
+		return 60 * time.Minute
+	}
+	return time.Duration(minutes) * time.Minute
+}
+
 func Key(operation, input string) string {
-    hash := sha256.Sum256([]byte(operation + ":" + input))
-    return fmt.Sprintf("conv:%x", hash)
+	hash := sha256.Sum256([]byte(operation + ":" + input))
+	return fmt.Sprintf("conv:%x", hash)
 }
 
 func (c *RedisCache) Get(ctx context.Context, key string) (string, bool) {
-    val, err := c.client.Get(ctx, key).Result()
-    if err != nil {
-        return "", false
-    }
-    return val, true
+	val, err := c.client.Get(ctx, key).Result()
+	if err != nil {
+		return "", false
+	}
+	return val, true
 }
 
 func (c *RedisCache) Set(ctx context.Context, key, value string) {
-    // fire and forget — cache failure should never break a conversion
-    c.client.Set(ctx, key, value, ttl)
+	c.client.Set(ctx, key, value, c.ttl)
 }

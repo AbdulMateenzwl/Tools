@@ -21,23 +21,7 @@ spec:
             - containerPort: 8080
           envFrom:
             - configMapRef:
-                name: auth-service-config
-          env:
-            - name: DB_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: postgres-secret
-                  key: password
-            - name: REDIS_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: redis-secret
-                  key: password
-            - name: JWT_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: auth-service-secret
-                  key: jwt_secret
+                name: auth-service-config  # all config + AWS creds here
           resources:
             requests:
               cpu: "100m"
@@ -49,11 +33,11 @@ spec:
             httpGet:
               path: /api/v1/auth/health
               port: 8080
-            initialDelaySeconds: 10
+            initialDelaySeconds: 15
             periodSeconds: 10
           readinessProbe:
             httpGet:
               path: /api/v1/auth/health
               port: 8080
-            initialDelaySeconds: 5
+            initialDelaySeconds: 10
             periodSeconds: 5
