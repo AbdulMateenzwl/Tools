@@ -1,0 +1,36 @@
+meta {
+  name: JWT Decode
+  type: http
+  seq: 5
+}
+
+post {
+  url: {{baseUrl}}/api/v1/tools/jwt/decode
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "input": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U"
+  }
+}
+
+assert {
+  res.status: eq 200
+  res.body.header.alg: eq HS256
+}
+
+tests {
+  test("never claims the signature is valid", function() {
+    expect(res.body.signature_valid).to.equal(false);
+  });
+}
+
+docs {
+  Decodes without verifying. signature_valid is always false by design.
+}

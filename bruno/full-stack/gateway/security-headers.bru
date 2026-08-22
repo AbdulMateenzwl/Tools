@@ -1,0 +1,32 @@
+meta {
+  name: Security headers
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/api/v1/convert/health
+  body: none
+  auth: none
+}
+
+assert {
+  res.status: eq 200
+}
+
+tests {
+  test("response-transformer plugin adds security headers", function() {
+    expect(res.getHeader("x-content-type-options")).to.equal("nosniff");
+    expect(res.getHeader("x-frame-options")).to.equal("DENY");
+  });
+  test("correlation-id plugin adds a request id", function() {
+    expect(res.getHeader("x-request-id")).to.be.a("string");
+  });
+  test("rate-limiting plugin advertises the daily budget", function() {
+    expect(res.getHeader("x-ratelimit-limit-day")).to.exist;
+  });
+}
+
+docs {
+  Fails if the Kong plugins are applied but not bound to the route.
+}

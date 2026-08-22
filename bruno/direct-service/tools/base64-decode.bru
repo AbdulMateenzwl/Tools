@@ -1,0 +1,32 @@
+meta {
+  name: Base64 Decode
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/api/v1/tools/base64/decode
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "input": "SGVsbG8gQ29udmVydFg="
+  }
+}
+
+assert {
+  res.status: eq 200
+}
+
+tests {
+  test("returns expected output", function() {
+    expect(res.body.output).to.equal("Hello ConvertX");
+  });
+}
+

@@ -1,0 +1,26 @@
+meta {
+  name: CORS allows a permitted origin
+  type: http
+  seq: 2
+}
+
+options {
+  url: {{baseUrl}}/api/v1/auth/register
+  body: none
+  auth: none
+}
+
+headers {
+  Origin: http://localhost:4200
+  Access-Control-Request-Method: POST
+}
+
+tests {
+  test("preflight succeeds", function() {
+    expect([200, 204]).to.include(res.getStatus());
+  });
+  test("echoes the allowed origin", function() {
+    expect(res.getHeader("access-control-allow-origin")).to.equal("http://localhost:4200");
+  });
+}
+

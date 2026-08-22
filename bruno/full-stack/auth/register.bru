@@ -1,0 +1,33 @@
+meta {
+  name: Register
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/api/v1/auth/register
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "email": "{{testEmail}}",
+    "password": "{{testPassword}}"
+  }
+}
+
+tests {
+  test("registers, or reports the user already exists", function() {
+    expect([201, 409]).to.include(res.getStatus());
+  });
+}
+
+docs {
+  Creates the user in the Cognito pool. Returns 409 on re-runs because
+  the email is fixed in the environment, which is expected and fine.
+}

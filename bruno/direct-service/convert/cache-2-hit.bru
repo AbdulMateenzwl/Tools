@@ -1,0 +1,30 @@
+meta {
+  name: Cache - second call is a hit
+  type: http
+  seq: 9
+}
+
+post {
+  url: {{baseUrl}}/api/v1/convert/json-to-xml
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "input": {{cacheProbe}}
+  }
+}
+
+assert {
+  res.status: eq 200
+  res.body.cached: eq true
+}
+
+docs {
+  Reuses the payload from the previous request. Run it directly after.
+}

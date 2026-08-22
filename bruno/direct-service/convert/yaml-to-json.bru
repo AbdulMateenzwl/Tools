@@ -1,0 +1,33 @@
+meta {
+  name: YAML to JSON
+  type: http
+  seq: 5
+}
+
+post {
+  url: {{baseUrl}}/api/v1/convert/yaml-to-json
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "input": "name: John\nage: 30"
+  }
+}
+
+assert {
+  res.status: eq 200
+}
+
+tests {
+  test("converts correctly", function() {
+    expect(res.body.output).to.include('"age": 30');
+    expect(res.body.output).to.not.include("30.0");
+  });
+}
+

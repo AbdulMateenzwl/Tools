@@ -1,0 +1,22 @@
+meta {
+  name: Generate UUID
+  type: http
+  seq: 6
+}
+
+get {
+  url: {{baseUrl}}/api/v1/tools/uuid
+  body: none
+  auth: none
+}
+
+assert {
+  res.status: eq 200
+}
+
+tests {
+  test("is a v4 uuid", function() {
+    expect(res.body.uuid).to.match(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  });
+}
+

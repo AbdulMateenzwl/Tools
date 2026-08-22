@@ -1,0 +1,34 @@
+meta {
+  name: Me
+  type: http
+  seq: 4
+}
+
+get {
+  url: {{baseUrl}}/api/v1/auth/me
+  body: none
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{accessToken}}
+}
+
+assert {
+  res.status: eq 200
+  res.body.role: eq free
+}
+
+tests {
+  test("returns the caller's email", function() {
+    expect(res.body.email).to.equal(bru.getEnvVar("testEmail"));
+  });
+}
+
+docs {
+  Requires Login to have run first.
+  
+  The email does not come from the token: Cognito access tokens carry no
+  email claim, so the service calls GetUser. role comes from the
+  cognito:groups claim, not a database column.
+}

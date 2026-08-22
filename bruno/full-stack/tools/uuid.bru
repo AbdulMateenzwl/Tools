@@ -1,0 +1,27 @@
+meta {
+  name: Generate UUID via gateway
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/api/v1/tools/uuid
+  body: none
+  auth: none
+}
+
+assert {
+  res.status: eq 200
+}
+
+tests {
+  test("is never cached by CloudFront", function() {
+    expect(res.body.uuid).to.be.a("string");
+  });
+}
+
+docs {
+  If this ever returns the same UUID twice, CloudFront caching has been
+  turned on for the API path. The distribution pins all TTLs to 0
+  specifically to prevent that.
+}

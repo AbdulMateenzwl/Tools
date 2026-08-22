@@ -1,0 +1,29 @@
+meta {
+  name: Invalid input returns 400
+  type: http
+  seq: 7
+}
+
+post {
+  url: {{baseUrl}}/api/v1/convert/json-to-xml
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "input": "not json {{{"
+  }
+}
+
+assert {
+  res.status: eq 400
+}
+
+docs {
+  Conversion failures must be 400, and must not be cached.
+}

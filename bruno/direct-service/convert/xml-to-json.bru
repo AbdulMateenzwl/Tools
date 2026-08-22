@@ -1,0 +1,32 @@
+meta {
+  name: XML to JSON
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/api/v1/convert/xml-to-json
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "input": "<person><name>John</name></person>"
+  }
+}
+
+assert {
+  res.status: eq 200
+}
+
+tests {
+  test("converts correctly", function() {
+    expect(res.body.output).to.include("John");
+  });
+}
+

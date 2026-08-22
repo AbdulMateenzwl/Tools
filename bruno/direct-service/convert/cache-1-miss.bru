@@ -1,0 +1,34 @@
+meta {
+  name: Cache - first call is a miss
+  type: http
+  seq: 8
+}
+
+post {
+  url: {{baseUrl}}/api/v1/convert/json-to-xml
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "input": {{cacheProbe}}
+  }
+}
+
+script:pre-request {
+  bru.setVar("cacheProbe", JSON.stringify(JSON.stringify({ probe: Date.now() })));
+}
+
+assert {
+  res.status: eq 200
+  res.body.cached: eq false
+}
+
+docs {
+  Generates a unique payload, so this is a miss even on repeat runs.
+}

@@ -1,0 +1,16 @@
+meta {
+  name: Me without a token is 401
+  type: http
+  seq: 7
+}
+
+get {
+  url: {{baseUrl}}/api/v1/auth/me
+  body: none
+  auth: none
+}
+
+assert {
+  res.status: eq 401
+}
+

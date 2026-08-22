@@ -1,0 +1,32 @@
+meta {
+  name: URL Decode
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{baseUrl}}/api/v1/tools/url/decode
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "input": "https%3A%2F%2Fconvertx.io"
+  }
+}
+
+assert {
+  res.status: eq 200
+}
+
+tests {
+  test("returns expected output", function() {
+    expect(res.body.output).to.equal("https://convertx.io");
+  });
+}
+

@@ -1,0 +1,26 @@
+meta {
+  name: YAML to JSON via gateway
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/api/v1/convert/yaml-to-json
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "input": "name: John\nage: 30"
+  }
+}
+
+assert {
+  res.status: eq 200
+}
+

@@ -1,0 +1,35 @@
+meta {
+  name: Refresh
+  type: http
+  seq: 5
+}
+
+post {
+  url: {{baseUrl}}/api/v1/auth/refresh
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "refresh_token": "{{refreshToken}}"
+  }
+}
+
+vars:post-response {
+  accessToken: res.body.access_token
+}
+
+assert {
+  res.status: eq 200
+}
+
+docs {
+  Cognito reissues only the access token, so the refresh token stays
+  valid until it expires. It does NOT rotate on every use the way the
+  old Redis-backed implementation did.
+}

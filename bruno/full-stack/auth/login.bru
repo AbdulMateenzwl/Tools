@@ -1,0 +1,45 @@
+meta {
+  name: Login
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{baseUrl}}/api/v1/auth/login
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "email": "{{testEmail}}",
+    "password": "{{testPassword}}"
+  }
+}
+
+vars:post-response {
+  accessToken: res.body.access_token
+  refreshToken: res.body.refresh_token
+}
+
+assert {
+  res.status: eq 200
+  res.body.expires_in: eq 900
+}
+
+tests {
+  test("returns both tokens", function() {
+    expect(res.body.access_token).to.be.a("string");
+    expect(res.body.refresh_token).to.be.a("string");
+  });
+}
+
+docs {
+  Saves accessToken and refreshToken for the requests below.
+  expires_in is 900 because the Cognito app client sets a 15-minute
+  access token validity.
+}

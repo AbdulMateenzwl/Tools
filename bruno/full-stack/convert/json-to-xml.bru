@@ -1,0 +1,35 @@
+meta {
+  name: JSON to XML via gateway
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/api/v1/convert/json-to-xml
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "input": "{\"name\":\"John\"}"
+  }
+}
+
+assert {
+  res.status: eq 200
+}
+
+tests {
+  test("routed through Kong", function() {
+    expect(res.getHeader("x-request-id")).to.be.a("string");
+  });
+}
+
+docs {
+  Same endpoint as the direct collection, but proving Kong routing works.
+}

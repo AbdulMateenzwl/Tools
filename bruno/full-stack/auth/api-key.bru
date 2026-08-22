@@ -1,0 +1,34 @@
+meta {
+  name: Generate API Key
+  type: http
+  seq: 6
+}
+
+post {
+  url: {{baseUrl}}/api/v1/auth/api-key
+  body: none
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{accessToken}}
+}
+
+assert {
+  res.status: eq 201
+}
+
+tests {
+  test("returns a cx_ prefixed key", function() {
+    expect(res.body.api_key).to.match(/^cx_[0-9a-f]{64}$/);
+  });
+}
+
+docs {
+  Stored SHA-256 hashed in RDS against the Cognito sub, and returned
+  in plaintext exactly once.
+  
+  NOTE: nothing validates these keys yet. No middleware reads key_hash,
+  and rate-limiting-registered is bound to no route, so a key currently
+  grants nothing.
+}
