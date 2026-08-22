@@ -1,0 +1,10 @@
+# Local development only — must never end up in the service image.
+docker-compose.yml
+dev/
+Makefile
+*_test.go
+
+# Build artefacts and noise
+conversion-service
+.git
+.DS_Store

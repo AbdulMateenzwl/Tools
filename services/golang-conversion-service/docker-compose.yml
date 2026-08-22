@@ -1,0 +1,86 @@
+# Local dependencies for the conversion service ONLY.
+#
+# Scoped deliberately:
+#   - It lives in this service's directory and carries its own project name,
+#     so it cannot merge with another compose project.
+#   - The root setup.sh never invokes docker compose. It builds images and
+#     applies Kubernetes manifests, where Redis is an ElastiCache cluster
+#     inside LocalStack. Running the whole project does not touch this file.
+#   - .dockerignore keeps it out of the service image.
+#
+# This file starts DEPENDENCIES ONLY. There is no service that builds from the
+# Dockerfile, so `docker compose up` has nothing to build — the app always runs
+# separately with `go run`.
+#
+# Usage, from this directory:
+#
+#   1. no dependencies at all (in-memory cache)
+#        go run ./cmd/main.go
+#
+#   2. against a real Redis
+#        docker compose up -d --wait
+#        REDIS_HOST=localhost:6379 REDIS_PASSWORD=localdev go run ./cmd/main.go
+#
+#   3. against Redis + SecretsManager (exercises the deployed code path)
+#        LOCALSTACK_PORT=4567 docker compose --profile aws up -d --wait
+#        AWS_ENDPOINT_URL=http://localhost:4567 AWS_REGION=us-east-1 \
+#          AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test go run ./cmd/main.go
+#
+#   stop:  docker compose --profile aws down -v
+
+name: convertx-conversion-dev
+
+services:
+  redis:
+    image: redis:7.2-alpine
+    container_name: convertx-dev-redis
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:-localdev}"]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-localdev}", "--no-auth-warning", "PING"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  # Only for exercising the SecretsManager code path, and pinned to 3.4 on
+  # purpose: localstack/localstack:latest is now a Pro build that exits 55
+  # ("License activation failed") without an auth token, and ACTIVATE_PRO=0
+  # does not override it. 3.4 is the last straightforwardly community image,
+  # and secretsmanager is a community service, so this needs no token at all.
+  # Working on conversions should not require a paid licence.
+  #
+  # The deployed stack uses LocalStack Pro for RDS/ElastiCache/Cognito/
+  # CloudFront; none of that is needed to work on conversions.
+  #
+  # NOTE: 4566 collides with any other LocalStack already running on the host.
+  # Override with LOCALSTACK_PORT=4567 (and point AWS_ENDPOINT_URL at it).
+  localstack:
+    profiles: ["aws"]
+    image: localstack/localstack:3.4
+    container_name: convertx-dev-localstack
+    environment:
+      SERVICES: secretsmanager
+      DEBUG: "0"
+      DEFAULT_REGION: us-east-1
+      EAGER_SERVICE_LOADING: "1"
+      # Address the service (running on the host) should use for Redis.
+      SEED_REDIS_ENDPOINT: "${SEED_REDIS_ENDPOINT:-localhost:6379}"
+      SEED_REDIS_PASSWORD: "${REDIS_PASSWORD:-localdev}"
+    ports:
+      - "${LOCALSTACK_PORT:-4566}:4566"
+    volumes:
+      # Scripts in ready.d run once LocalStack is accepting requests.
+      - ./dev/seed-secrets.sh:/etc/localstack/init/ready.d/seed-secrets.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:4566/_localstack/health || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+volumes:
+  redis-data:

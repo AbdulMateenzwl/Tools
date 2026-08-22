@@ -10,10 +10,12 @@ import (
 )
 
 type ConvertHandler struct {
-    cache *cache.RedisCache
+    cache cache.Store
 }
 
-func NewConvertHandler(cache *cache.RedisCache) *ConvertHandler {
+// Takes the Store interface rather than *cache.RedisCache so handlers can be
+// exercised in tests, and so the service can run against an in-memory cache.
+func NewConvertHandler(cache cache.Store) *ConvertHandler {
     return &ConvertHandler{cache: cache}
 }
 

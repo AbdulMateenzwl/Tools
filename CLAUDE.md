@@ -30,7 +30,35 @@ There is no JWT signing secret any more: Cognito signs tokens with its own rotat
 
 ### Tests
 
-`tests/test.sh` is a bash/curl suite, not Go tests — there are no `_test.go` files anywhere. It requires an active port-forward on `localhost:8080` **and** working `kubectl` access, because it flushes Redis and inspects pod health directly. There is no way to run a single test; to narrow the scope, comment out `section` blocks or copy the individual `curl` out of the file.
+There are two independent test layers.
+
+**Go unit tests** (`services/golang-conversion-service/**/*_test.go`) need no infrastructure at all — no cluster, no LocalStack, no Redis:
+
+```bash
+cd services/golang-conversion-service
+go test ./...                 # all tests
+go test ./... -cover          # coverage
+go test ./... -race           # race detector
+go test ./internal/converter/ -run TestYAMLToJSON -v   # a single test
+```
+
+### Running the conversion service alone
+
+`cmd/main.go` picks its cache backend from the environment (`newCacheStore`), which is what makes the service runnable without the rest of the platform:
+
+| Backend | Dependencies | Command |
+|---|---|---|
+| in-memory | none | `go run ./cmd/main.go` |
+| plain Redis | `docker compose up -d --wait` | `REDIS_HOST=localhost:6379 REDIS_PASSWORD=localdev go run ./cmd/main.go` |
+| SecretsManager | `LOCALSTACK_PORT=4567 docker compose --profile aws up -d --wait` | `AWS_ENDPOINT_URL=http://localhost:4567 AWS_REGION=us-east-1 AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test go run ./cmd/main.go` |
+
+Stop dependencies with `docker compose --profile aws down -v`.
+
+`services/golang-conversion-service/docker-compose.yml` starts only this service's dependencies — Redis by default, plus a LocalStack under the `aws` profile seeded with `convertx/redis/{endpoint,password}` by `dev/seed-secrets.sh`. It is scoped to the service on purpose: it carries its own compose project name, `.dockerignore` keeps it out of the image, and **the root `setup.sh` never invokes docker compose** (it builds images and applies Kubernetes manifests, where Redis is an ElastiCache cluster). Running the whole project does not touch it.
+
+Two gotchas baked into that file: LocalStack is pinned to **3.4** because `localstack/localstack:latest` is now a Pro build that exits 55 without an auth token (and `ACTIVATE_PRO=0` does not override it), and `LOCALSTACK_PORT` defaults to **4567** because 4566 usually already has a LocalStack on it.
+
+**`tests/test.sh`** is a bash/curl integration suite covering the whole deployed stack. It requires an active port-forward on `localhost:8080` **and** `kubectl` access, because it flushes Redis and asserts on RDS/ElastiCache/CloudFront state. There is no way to run a single case; comment out `section` blocks to narrow it.
 
 Anonymous rate limiting is 20 requests/day per IP, which is less than the suite consumes. The suite handles this by flushing Redis DB 1 up front — so a manual `curl` loop can exhaust the daily budget and return 429 for every later request. Reset it with:
 
