@@ -52,33 +52,73 @@ put_secret "convertx/postgres/password" "$POSTGRES_PASS"
 
 echo "Creating RDS instance..."
 
-$AWS rds create-db-instance \
-  --db-instance-identifier convertx-db \
-  --db-instance-class db.t3.micro \
-  --engine postgres \
-  --engine-version 16.2 \
-  --master-username convertx \
-  --master-user-password "$POSTGRES_PASS" \
-  --allocated-storage 20 \
-  --db-name convertx_db >/dev/null 2>&1 || echo "  (instance already exists)"
+# LocalStack runs a real postgres on a random internal port and proxies an
+# external port to it. Reporting "available" only means the metadata exists,
+# not that the proxy is listening — see the reachability check below.
+tcp_open() {
+  timeout 3 bash -c "exec 3<>/dev/tcp/$1/$2" 2>/dev/null
+}
 
-echo -n "  waiting for convertx-db to become available"
-for i in $(seq 1 60); do
-  STATUS=$($AWS rds describe-db-instances \
+create_rds() {
+  $AWS rds create-db-instance \
     --db-instance-identifier convertx-db \
-    --query 'DBInstances[0].DBInstanceStatus' --output text 2>/dev/null || echo "creating")
-  if [ "$STATUS" = "available" ]; then break; fi
-  echo -n "."
-  sleep 2
-done
-echo ""
+    --db-instance-class db.t3.micro \
+    --engine postgres \
+    --engine-version 16.2 \
+    --master-username convertx \
+    --master-user-password "$POSTGRES_PASS" \
+    --allocated-storage 20 \
+    --db-name convertx_db >/dev/null 2>&1 || echo "  (instance already exists)"
 
-DB_PORT=$($AWS rds describe-db-instances \
-  --db-instance-identifier convertx-db \
-  --query 'DBInstances[0].Endpoint.Port' --output text)
+  echo -n "  waiting for convertx-db to become available"
+  for _ in $(seq 1 60); do
+    STATUS=$($AWS rds describe-db-instances \
+      --db-instance-identifier convertx-db \
+      --query 'DBInstances[0].DBInstanceStatus' --output text 2>/dev/null || echo "creating")
+    if [ "$STATUS" = "available" ]; then break; fi
+    echo -n "."
+    sleep 2
+  done
+  echo ""
+
+  DB_PORT=$($AWS rds describe-db-instances \
+    --db-instance-identifier convertx-db \
+    --query 'DBInstances[0].Endpoint.Port' --output text)
+}
+
+delete_rds() {
+  $AWS rds delete-db-instance --db-instance-identifier convertx-db \
+    --skip-final-snapshot >/dev/null 2>&1 || true
+  echo -n "  waiting for the old instance to go away"
+  for _ in $(seq 1 30); do
+    $AWS rds describe-db-instances --db-instance-identifier convertx-db >/dev/null 2>&1 || break
+    echo -n "."
+    sleep 2
+  done
+  echo ""
+}
+
+create_rds
+
+# With PERSISTENCE=1 a restored instance comes back marked "available" with a
+# freshly assigned external port, but LocalStack does not re-bind the proxy for
+# it — the port refuses connections while postgres itself is running on an
+# internal one. It also leaks the previous port, so this drifts further on
+# every restart. Rebuilding the instance is the only reliable repair.
+if [ -n "$DB_PORT" ] && [ "$DB_PORT" != "None" ] && ! tcp_open "$CLUSTER_HOST" "$DB_PORT"; then
+  echo "  ! reports available but $CLUSTER_HOST:$DB_PORT refuses connections"
+  echo "  ! stale proxy after a persistence restore — rebuilding the instance"
+  delete_rds
+  create_rds
+fi
 
 if [ -z "$DB_PORT" ] || [ "$DB_PORT" = "None" ]; then
   echo "  ✗ could not resolve RDS port — aborting"; exit 1
+fi
+
+if ! tcp_open "$CLUSTER_HOST" "$DB_PORT"; then
+  echo "  ✗ RDS still unreachable at $CLUSTER_HOST:$DB_PORT after a rebuild — aborting"
+  exit 1
 fi
 
 # Rewrite the host: LocalStack reports its own view, pods need the Service DNS.
@@ -221,8 +261,7 @@ else
     --query "DistributionList.Items[?Comment=='convertx-api'].Id | [0]" \
     --output text 2>/dev/null || echo "")
 
-  if [ -z "$DIST_ID" ] || [ "$DIST_ID" = "None" ]; then
-    cat > /tmp/cf-config.json <<CFJSON
+  cat > /tmp/cf-config.json <<CFJSON
 {
   "CallerReference": "convertx-api-distribution",
   "Comment": "convertx-api",
@@ -263,9 +302,30 @@ else
 }
 CFJSON
 
+  if [ -z "$DIST_ID" ] || [ "$DIST_ID" = "None" ]; then
     DIST_ID=$($AWS cloudfront create-distribution \
       --distribution-config file:///tmp/cf-config.json \
       --query 'Distribution.Id' --output text 2>/dev/null || echo "")
+  else
+    # Kong's dataplane Service name is regenerated whenever Kong is
+    # reinstalled, so an existing distribution can be left pointing at a
+    # service that no longer resolves. Creation is skipped for an existing
+    # distribution, so the origin has to be reconciled explicitly.
+    CURRENT_ORIGIN=$($AWS cloudfront get-distribution --id "$DIST_ID" \
+      --query 'Distribution.DistributionConfig.Origins.Items[0].DomainName' \
+      --output text 2>/dev/null | tr -d '\r\n')
+
+    if [ "$CURRENT_ORIGIN" != "$KONG_ORIGIN" ]; then
+      ETAG=$($AWS cloudfront get-distribution --id "$DIST_ID" \
+        --query 'ETag' --output text 2>/dev/null | tr -d '\r\n')
+      if $AWS cloudfront update-distribution --id "$DIST_ID" \
+           --distribution-config file:///tmp/cf-config.json \
+           --if-match "$ETAG" >/dev/null 2>&1; then
+        echo "  ✓ origin updated: $CURRENT_ORIGIN -> $KONG_ORIGIN"
+      else
+        echo "  ! could not update the origin; it still points at $CURRENT_ORIGIN"
+      fi
+    fi
   fi
 
   if [ -z "$DIST_ID" ] || [ "$DIST_ID" = "None" ]; then

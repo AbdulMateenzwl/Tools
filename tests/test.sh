@@ -813,11 +813,15 @@ else
   ORIGIN=$(cf get-distribution --id "$DIST_ID" \
     --query 'Distribution.DistributionConfig.Origins.Items[0].DomainName' \
     --output text | tr -d '\n')
-  if echo "$ORIGIN" | grep -q "dataplane-ingress"; then
-    pass "Origin points at the Kong dataplane ($ORIGIN)"
-  else
-    fail "Origin points at Kong" "a dataplane-ingress service" "$ORIGIN"
-  fi
+
+  # Compare against the CURRENT dataplane, not just the name prefix. Kong
+  # regenerates that Service name on every reinstall, and a distribution
+  # created by an earlier run keeps pointing at the old one — which a
+  # prefix match would happily accept.
+  CURRENT_DP=$(kubectl get svc -n kong --no-headers 2>/dev/null \
+    | grep dataplane-ingress | awk '{print $1}' | head -1)
+  assert_json "Origin points at the current Kong dataplane" \
+    "$CURRENT_DP.kong.svc.cluster.local" "$ORIGIN"
 fi
 
 # NOTE: traffic is not exercised through the distribution domain — it is not

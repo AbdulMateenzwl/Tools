@@ -80,6 +80,12 @@ kubectl exec -n localstack $POD -- redis-cli -h 127.0.0.1 -p "${EP##*:}" -a "$PW
 
 **Helm 4 works.** `Readme.md` says Helm 3.x, but the Kong Gateway Operator chart installs fine under Helm 4.2.4. Helm is a hard prerequisite and is not bundled with Docker Desktop — `brew install helm`.
 
+**`DBInstanceStatus: available` does not mean RDS is reachable.** LocalStack runs a real postgres on a random internal port and proxies an external one to it. After a `PERSISTENCE=1` restore the instance comes back marked available with a *newly assigned* external port, but the proxy is never re-bound — so the port refuses connections while postgres is running fine internally. It also leaks the previous port, so the assignment drifts on every restart and eventually exhausts the 4510-4514 range.
+
+Symptom: auth-service CrashLoopBackOff with `ping postgres: ... connect: connection refused`, while `describe-db-instances` cheerfully reports `available`. Confirm with `ss -tlnp` inside the LocalStack pod — you will see postgres on a high port and nothing on the one RDS advertises.
+
+`bootstrap.sh` now TCP-checks the advertised port and rebuilds the instance if it refuses. Rebuilding is the only reliable repair; restarting LocalStack does not help.
+
 **Never use `kubectl wait --for=condition=ready pod --selector=...` here.** It snapshots matching pods at start and blocks indefinitely if one is later deleted. The LocalStack Deployment uses `strategy: Recreate`, and the services get a `kubectl rollout restart`, so on every re-run a watched pod disappears and the wait hangs for its full timeout — then fails the run while the workload is perfectly healthy. `setup.sh` uses `kubectl rollout status deployment/<name>` instead. The bootstrap Job wait is fine: it targets a named object, not a selector.
 
 ## Building
