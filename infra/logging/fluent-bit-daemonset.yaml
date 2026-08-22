@@ -1,0 +1,73 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: fluent-bit
+  namespace: convertx
+  labels:
+    app: fluent-bit
+spec:
+  selector:
+    matchLabels:
+      app: fluent-bit
+  template:
+    metadata:
+      labels:
+        app: fluent-bit
+    spec:
+      # Docker Desktop runs a single node that is also the control plane.
+      # Tolerate the taint in case it is present on other clusters.
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+        - key: node-role.kubernetes.io/master
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: fluent-bit
+          image: fluent/fluent-bit:4.2.8
+          args: ["-c", "/fluent-bit/etc/conf/fluent-bit.conf"]
+          envFrom:
+            # Reuses the existing test/test credentials LocalStack accepts.
+            - secretRef:
+                name: aws-credentials
+          env:
+            - name: AWS_REGION
+              value: "us-east-1"
+          ports:
+            - name: http
+              containerPort: 2020
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "200m"
+              memory: "192Mi"
+          volumeMounts:
+            - name: config
+              mountPath: /fluent-bit/etc/conf
+            # Writable: fluent-bit stores its tail offset DBs alongside the logs.
+            # /var/log/containers holds symlinks into /var/log/pods, so this one
+            # mount covers both.
+            - name: varlog
+              mountPath: /var/log
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 2020
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: 2020
+            initialDelaySeconds: 5
+            periodSeconds: 10
+      volumes:
+        - name: config
+          configMap:
+            name: fluent-bit-config
+        - name: varlog
+          hostPath:
+            path: /var/log

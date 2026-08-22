@@ -11,9 +11,20 @@ import (
 )
 
 type Secrets struct {
-	DBPassword    string
-	RedisPassword string
-	JWTSecret     string
+	// RDS still backs the api_keys table. The users table is gone — Cognito
+	// is the identity store now.
+	DBUser     string
+	DBPassword string
+	// DBEndpoint is host:port. RDS gets a dynamic port from LocalStack, so it
+	// cannot live in a ConfigMap; the bootstrap resolves and publishes it.
+	DBEndpoint string
+
+	CognitoUserPoolID string
+	CognitoClientID   string
+	// CognitoJWKSURL is where RS256 signing keys are fetched from. LocalStack
+	// serves these on a different path than real AWS, hence a stored value
+	// rather than one derived from the pool id.
+	CognitoJWKSURL string
 }
 
 func Load(ctx context.Context) (*Secrets, error) {
@@ -40,14 +51,29 @@ func Load(ctx context.Context) (*Secrets, error) {
 		return nil, fmt.Errorf("get db password: %w", err)
 	}
 
-	s.RedisPassword, err = getSecret(ctx, client, "convertx/redis/password")
+	s.CognitoUserPoolID, err = getSecret(ctx, client, "convertx/cognito/user_pool_id")
 	if err != nil {
-		return nil, fmt.Errorf("get redis password: %w", err)
+		return nil, fmt.Errorf("get cognito user pool id: %w", err)
 	}
 
-	s.JWTSecret, err = getSecret(ctx, client, "convertx/auth/jwt_secret")
+	s.CognitoClientID, err = getSecret(ctx, client, "convertx/cognito/client_id")
 	if err != nil {
-		return nil, fmt.Errorf("get jwt secret: %w", err)
+		return nil, fmt.Errorf("get cognito client id: %w", err)
+	}
+
+	s.CognitoJWKSURL, err = getSecret(ctx, client, "convertx/cognito/jwks_url")
+	if err != nil {
+		return nil, fmt.Errorf("get cognito jwks url: %w", err)
+	}
+
+	s.DBUser = getSecretOrEnv(ctx, client, "convertx/postgres/username", "DB_USER")
+	if s.DBUser == "" {
+		return nil, fmt.Errorf("db user unresolved: neither convertx/postgres/username nor DB_USER is set")
+	}
+
+	s.DBEndpoint = getSecretOrEnv(ctx, client, "convertx/postgres/endpoint", "DB_HOST")
+	if s.DBEndpoint == "" {
+		return nil, fmt.Errorf("db endpoint unresolved: neither convertx/postgres/endpoint nor DB_HOST is set")
 	}
 
 	return s, nil
@@ -61,4 +87,13 @@ func getSecret(ctx context.Context, client *secretsmanager.Client, name string) 
 		return "", fmt.Errorf("get secret %s: %w", name, err)
 	}
 	return aws.ToString(result.SecretString), nil
+}
+
+// getSecretOrEnv prefers SecretsManager and falls back to an environment
+// variable, so a cluster still running self-hosted postgres keeps working.
+func getSecretOrEnv(ctx context.Context, client *secretsmanager.Client, name, envKey string) string {
+	if val, err := getSecret(ctx, client, name); err == nil && val != "" {
+		return val
+	}
+	return os.Getenv(envKey)
 }

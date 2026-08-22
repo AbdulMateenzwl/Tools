@@ -25,10 +25,24 @@
 #   Value: PostgreSQL username (convertx)
 #   Used by: auth-service
 
-# convertx/auth/jwt_secret
-#   Value: 32-byte hex random string
+# convertx/cognito/user_pool_id
+# convertx/cognito/client_id
+#   Value: ids of the convertx-users pool and convertx-api app client
 #   Used by: auth-service
-#   Generate: openssl rand -hex 32
+#   Created by: bootstrap.sh (cognito-idp create-user-pool / -client)
+
+# convertx/cognito/jwks_url
+#   Value: where RS256 signing keys are fetched from. Stored rather than
+#          derived because LocalStack serves these on a different path
+#          than real AWS.
+#   Used by: auth-service
+
+# convertx/cognito/issuer
+#   Value: expected "iss" claim. Empty disables the check.
+#   Used by: auth-service
+
+# NOTE: convertx/auth/jwt_secret is obsolete. Cognito signs with its own
+# RSA keys, so there is no shared signing secret any more.
 
 # ── K8s Secrets Still Required (not in SecretsManager) ───────
 

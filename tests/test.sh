@@ -19,10 +19,33 @@ NC='\033[0m'
 
 # ── Helpers ────────────────────────────────────────────────────
 
-REDIS_POD=$(kubectl get pod -n kong -l app=redis \
-  -o jsonpath='{.items[0].metadata.name}')
-REDIS_PASS=$(kubectl get secret redis-secret -n kong \
-  -o jsonpath='{.data.password}' | base64 -d)
+# Redis now lives inside LocalStack as ElastiCache on a dynamic port, so both
+# the endpoint and the password are resolved from SecretsManager.
+LOCALSTACK_POD=$(kubectl get pod -n localstack -l app=localstack \
+  -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+
+ls_secret() {
+  kubectl exec -n localstack "$LOCALSTACK_POD" -- \
+    awslocal secretsmanager get-secret-value \
+      --secret-id "$1" --query SecretString --output text 2>/dev/null \
+    | tr -d '\r\n'
+}
+
+REDIS_ENDPOINT=$(ls_secret convertx/redis/endpoint)
+REDIS_EP_PORT="${REDIS_ENDPOINT##*:}"
+REDIS_PASS=$(ls_secret convertx/redis/password)
+
+# An empty password means ElastiCache is not enforcing AUTH — send none.
+redis_cli() {
+  local DB=$1; shift
+  if [ -n "$REDIS_PASS" ]; then
+    kubectl exec -n localstack "$LOCALSTACK_POD" -- \
+      redis-cli -h 127.0.0.1 -p "$REDIS_EP_PORT" -a "$REDIS_PASS" -n "$DB" "$@"
+  else
+    kubectl exec -n localstack "$LOCALSTACK_POD" -- \
+      redis-cli -h 127.0.0.1 -p "$REDIS_EP_PORT" -n "$DB" "$@"
+  fi
+}
 
 pass() {
   PASS=$((PASS + 1))
@@ -43,13 +66,11 @@ fail() {
 }
 
 reset_rate_limit() {
-  kubectl exec -n kong $REDIS_POD -- \
-    redis-cli -a $REDIS_PASS -n 1 FLUSHDB > /dev/null 2>&1
+  redis_cli 1 FLUSHDB > /dev/null 2>&1
 }
 
 reset_cache() {
-  kubectl exec -n kong $REDIS_POD -- \
-    redis-cli -a $REDIS_PASS -n 0 FLUSHDB > /dev/null 2>&1
+  redis_cli 0 FLUSHDB > /dev/null 2>&1
 }
 
 reset_all() {
@@ -143,17 +164,9 @@ fi
 # ── Reset rate limits and cache ────────────────────────────────
 section "Resetting Rate Limits and Cache"
 
-REDIS_POD=$(kubectl get pod -n kong -l app=redis \
-  -o jsonpath='{.items[0].metadata.name}')
-REDIS_PASS=$(kubectl get secret redis-secret -n kong \
-  -o jsonpath='{.data.password}' | base64 -d)
-
-# DB 0 = conversion cache
-kubectl exec -n kong $REDIS_POD -- \
-  redis-cli -a $REDIS_PASS -n 0 FLUSHDB > /dev/null 2>&1
-# DB 1 = rate limiting counters
-kubectl exec -n kong $REDIS_POD -- \
-  redis-cli -a $REDIS_PASS -n 1 FLUSHDB > /dev/null 2>&1
+# DB 0 = conversion cache, DB 1 = rate limiting counters
+reset_cache
+reset_rate_limit
 
 pass "Rate limits and cache reset"
 
@@ -180,9 +193,19 @@ check_pods() {
 
 check_pods "convertx"  "app=auth-service"       "Auth Service pods"
 check_pods "convertx"  "app=conversion-service"  "Conversion Service pods"
-check_pods "convertx"  "app=postgres"            "PostgreSQL pod"
-check_pods "kong"      "app=redis"               "Redis pod"
 check_pods "localstack" "app=localstack"         "LocalStack pod"
+
+# PostgreSQL and Redis are no longer pods — they are RDS and ElastiCache
+# instances inside LocalStack, so assert on their AWS status instead.
+RDS_STATUS=$(kubectl exec -n localstack "$LOCALSTACK_POD" -- \
+  awslocal rds describe-db-instances --db-instance-identifier convertx-db \
+    --query 'DBInstances[0].DBInstanceStatus' --output text 2>/dev/null | tr -d '\r\n')
+assert_json "RDS instance convertx-db is available" "available" "$RDS_STATUS"
+
+CACHE_STATUS=$(kubectl exec -n localstack "$LOCALSTACK_POD" -- \
+  awslocal elasticache describe-cache-clusters --cache-cluster-id convertx-cache \
+    --query 'CacheClusters[0].CacheClusterStatus' --output text 2>/dev/null | tr -d '\r\n')
+assert_json "ElastiCache cluster convertx-cache is available" "available" "$CACHE_STATUS"
 
 # Check Kong dataplane
 KONG_RUNNING=$(kubectl get pods -n kong --no-headers 2>/dev/null | \
@@ -356,12 +379,24 @@ else
   fail "Refresh returns new access_token" "JWT token" "null or empty"
 fi
 
-# Old refresh token should now be invalid (rotation)
-OLD_REFRESH_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+# BEHAVIOUR CHANGE (Cognito): refresh tokens no longer rotate on every use.
+# The old implementation deleted the refresh token from Redis and issued a new
+# one; Cognito's REFRESH_TOKEN_AUTH flow reissues only the access token, so the
+# same refresh token stays valid until it expires. The service revokes the old
+# token only when a genuinely new one is returned. Assert reusability, which is
+# the real contract now.
+REUSE_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
   $BASE_URL/api/v1/auth/refresh \
   -H "Content-Type: application/json" \
   -d "{\"refresh_token\":\"$REFRESH_TOKEN\"}")
-assert_status "POST /api/v1/auth/refresh (old token rejected)" "401" "$OLD_REFRESH_STATUS"
+assert_status "POST /api/v1/auth/refresh (token reusable until expiry)" "200" "$REUSE_STATUS"
+
+# A garbage refresh token must still be rejected.
+BAD_REFRESH_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+  $BASE_URL/api/v1/auth/refresh \
+  -H "Content-Type: application/json" \
+  -d '{"refresh_token":"not-a-real-refresh-token"}')
+assert_status "POST /api/v1/auth/refresh (invalid token rejected)" "401" "$BAD_REFRESH_STATUS"
 
 # ── Auth Service — API Key ─────────────────────────────────────
 section "Auth Service — API Key Generation"
@@ -564,11 +599,21 @@ JWT_RESP=$(curl -s -X POST \
   -H "Content-Type: application/json" \
   -d "{\"input\":\"$ACCESS_TOKEN\"}")
 
-JWT_EMAIL=$(echo $JWT_RESP | jq -r '.payload.email')
 JWT_ALG=$(echo $JWT_RESP | jq -r '.header.alg')
+JWT_USE=$(echo $JWT_RESP | jq -r '.payload.token_use')
+JWT_SUB=$(echo $JWT_RESP | jq -r '.payload.sub')
 
-assert_json "JWT decode returns correct email" "$TEST_EMAIL" "$JWT_EMAIL"
-assert_json "JWT decode returns correct algorithm" "HS256" "$JWT_ALG"
+# Cognito signs with rotating RSA keys, not the old shared HS256 secret.
+assert_json "JWT decode returns correct algorithm" "RS256" "$JWT_ALG"
+
+# Access tokens carry no email claim — that is why /me calls GetUser.
+assert_json "Access token is an access token" "access" "$JWT_USE"
+
+if [ -n "$JWT_SUB" ] && [ "$JWT_SUB" != "null" ]; then
+  pass "Access token carries a sub claim"
+else
+  fail "Access token carries a sub claim" "a Cognito sub" "$JWT_SUB"
+fi
 
 INVALID_JWT_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
   $BASE_URL/api/v1/tools/jwt/decode \
@@ -601,8 +646,7 @@ reset_all
 section "Redis Caching"
 
 # Flush conversion cache (DB 0) so we get a fresh result
-kubectl exec -n kong $REDIS_POD -- \
-  redis-cli -a $REDIS_PASS -n 0 FLUSHDB > /dev/null 2>&1
+reset_cache
 
 # Use a unique payload with timestamp so it is never pre-cached
 CACHE_TS=$(date +%s%N)
@@ -688,6 +732,97 @@ else
   fail "X-Request-ID uniqueness" "Different IDs" "$REQ_ID_1 == $REQ_ID_2"
 fi
 
+
+# ── CloudWatch Log Shipping ────────────────────────────────────
+section "CloudWatch Log Shipping"
+
+check_pods "convertx" "app=fluent-bit" "fluent-bit pods"
+
+# The suite has been generating traffic throughout, so by now fluent-bit
+# should have flushed at least once (SERVICE Flush is 5s).
+for GROUP in /convertx/auth-service /convertx/conversion-service /convertx/kong; do
+  GROUP_EXISTS=$(kubectl exec -n localstack "$LOCALSTACK_POD" -- \
+    awslocal logs describe-log-groups --log-group-name-prefix "$GROUP" \
+      --query 'logGroups[0].logGroupName' --output text 2>/dev/null | tr -d '\r\n')
+  assert_json "Log group $GROUP exists" "$GROUP" "$GROUP_EXISTS"
+done
+
+# Streams only appear once a record is actually delivered, so this is the
+# assertion that proves the pipeline works rather than just that it is wired.
+wait_for_stream() {
+  local GROUP=$1
+  for i in $(seq 1 12); do
+    local COUNT=$(kubectl exec -n localstack "$LOCALSTACK_POD" -- \
+      awslocal logs describe-log-streams --log-group-name "$GROUP" \
+        --query 'length(logStreams)' --output text 2>/dev/null | tr -d '\r\n')
+    if [ -n "$COUNT" ] && [ "$COUNT" != "0" ] && [ "$COUNT" != "None" ]; then
+      echo "$COUNT"; return
+    fi
+    sleep 5
+  done
+  echo "0"
+}
+
+for GROUP in /convertx/auth-service /convertx/conversion-service /convertx/kong; do
+  STREAMS=$(wait_for_stream "$GROUP")
+  if [ "$STREAMS" != "0" ]; then
+    pass "$GROUP has $STREAMS delivered stream(s)"
+  else
+    fail "$GROUP received logs" "at least 1 stream" "0 streams after 60s"
+  fi
+done
+
+# ── CloudFront ─────────────────────────────────────────────────
+section "CloudFront"
+
+cf() {
+  kubectl exec -n localstack "$LOCALSTACK_POD" -- awslocal cloudfront "$@" 2>/dev/null | tr -d '\r'
+}
+
+DIST_ID=$(cf list-distributions \
+  --query "DistributionList.Items[?Comment=='convertx-api'].Id | [0]" \
+  --output text | tr -d '\n')
+
+if [ -z "$DIST_ID" ] || [ "$DIST_ID" = "None" ]; then
+  fail "CloudFront distribution exists" "a distribution commented convertx-api" "none found"
+else
+  pass "Distribution exists ($DIST_ID)"
+
+  # These two assertions are the whole point of the distribution config.
+  # CloudFront defaults DefaultTTL to 86400; at that setting GET /tools/uuid
+  # would be cached and every caller would receive the same UUID.
+  DEFAULT_TTL=$(cf get-distribution --id "$DIST_ID" \
+    --query 'Distribution.DistributionConfig.DefaultCacheBehavior.DefaultTTL' \
+    --output text | tr -d '\n')
+  MAX_TTL=$(cf get-distribution --id "$DIST_ID" \
+    --query 'Distribution.DistributionConfig.DefaultCacheBehavior.MaxTTL' \
+    --output text | tr -d '\n')
+
+  assert_json "DefaultTTL is 0 (GET /tools/uuid must never be cached)" "0" "$DEFAULT_TTL"
+  assert_json "MaxTTL is 0" "0" "$MAX_TTL"
+
+  METHODS=$(cf get-distribution --id "$DIST_ID" \
+    --query 'Distribution.DistributionConfig.DefaultCacheBehavior.AllowedMethods.Items' \
+    --output text)
+  if echo "$METHODS" | grep -q "POST"; then
+    pass "POST is allowed through to the origin"
+  else
+    fail "POST allowed through to origin" "POST in AllowedMethods" "$METHODS"
+  fi
+
+  ORIGIN=$(cf get-distribution --id "$DIST_ID" \
+    --query 'Distribution.DistributionConfig.Origins.Items[0].DomainName' \
+    --output text | tr -d '\n')
+  if echo "$ORIGIN" | grep -q "dataplane-ingress"; then
+    pass "Origin points at the Kong dataplane ($ORIGIN)"
+  else
+    fail "Origin points at Kong" "a dataplane-ingress service" "$ORIGIN"
+  fi
+fi
+
+# NOTE: traffic is not exercised through the distribution domain — it is not
+# resolvable from here. These assertions cover the cache posture, which is the
+# part that can silently break correctness.
 
 # ── Summary ────────────────────────────────────────────────────
 echo ""

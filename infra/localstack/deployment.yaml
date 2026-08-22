@@ -5,6 +5,9 @@ metadata:
   namespace: localstack
 spec:
   replicas: 1
+  strategy:
+    # RWO hostPath volume — the old pod must release it before the new one binds.
+    type: Recreate
   selector:
     matchLabels:
       app: localstack
@@ -15,33 +18,57 @@ spec:
     spec:
       containers:
         - name: localstack
-          image: localstack/localstack:3.4
+          # Pinned to a CalVer release. LocalStack licences enforce a minimum
+          # version — 3.4 is rejected with "requires localstack-pro 4.4.0 or
+          # higher". Bump this rather than falling back to :latest.
+          image: localstack/localstack-pro:2026.7.5
           ports:
-            - containerPort: 4566    # main endpoint — all services on one port
-            - containerPort: 4510    # ECR endpoint
+            - containerPort: 4566          # main edge endpoint — all AWS APIs
+            - containerPort: 4510          # external service ports (RDS, ElastiCache, ECR)
+            - containerPort: 4511
+            - containerPort: 4512
+            - containerPort: 4513
+            - containerPort: 4514
           envFrom:
             - configMapRef:
                 name: localstack-config
+          env:
+            - name: LOCALSTACK_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: localstack-auth
+                  key: auth-token
           resources:
+            # Higher than the community image: RDS and ElastiCache run real
+            # postgres and redis processes inside this container.
             requests:
-              cpu: "250m"
-              memory: "512Mi"
+              cpu: "500m"
+              memory: "2Gi"
             limits:
-              cpu: "1000m"
-              memory: "1Gi"
+              cpu: "2000m"
+              memory: "4Gi"
+          volumeMounts:
+            - name: localstack-data
+              mountPath: /var/lib/localstack
           readinessProbe:
             httpGet:
               path: /_localstack/health
               port: 4566
-            initialDelaySeconds: 20
+            initialDelaySeconds: 30
             periodSeconds: 10
             timeoutSeconds: 5
-            failureThreshold: 3
+            failureThreshold: 6
           livenessProbe:
             httpGet:
               path: /_localstack/health
               port: 4566
-            initialDelaySeconds: 30
+            # Generous: Pro validates the license on boot and restores
+            # persisted state, both slower than a cold community start.
+            initialDelaySeconds: 90
             periodSeconds: 15
             timeoutSeconds: 5
-            failureThreshold: 3
+            failureThreshold: 6
+      volumes:
+        - name: localstack-data
+          persistentVolumeClaim:
+            claimName: localstack-pvc

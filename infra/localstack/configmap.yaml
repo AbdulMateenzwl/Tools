@@ -4,8 +4,24 @@ metadata:
   name: localstack-config
   namespace: localstack
 data:
-  SERVICES: "s3,sqs,secretsmanager,ecr"   # only enable what we need
+  # Pro services. rds + elasticache run REAL postgres/redis processes inside
+  # the LocalStack container, which is why they replace the StatefulSet/Deployment.
+  SERVICES: "s3,sqs,secretsmanager,ecr,rds,elasticache,logs,cloudwatch,cognito-idp,cloudfront,iam,sts"
   DEBUG: "0"
   DEFAULT_REGION: "us-east-1"
-  PERSISTENCE: "0"                          # dev only, no persistence needed
-  EAGER_SERVICE_LOADING: "1"               # start all services immediately on boot
+
+  # Pro-only. Survives pod restarts so secrets/RDS data no longer vanish and
+  # force a bootstrap re-run. Needs the /var/lib/localstack volume below.
+  PERSISTENCE: "1"
+
+  EAGER_SERVICE_LOADING: "1"
+
+  # Hostname LocalStack reports in returned endpoints (RDS/ElastiCache addresses).
+  # Without this it reports "localhost", which is meaningless to other pods.
+  LOCALSTACK_HOST: "localstack.localstack.svc.cluster.local:4566"
+
+  # RDS/ElastiCache listen on ports drawn from this range. Kept deliberately
+  # narrow because a K8s Service cannot express a port range — ports 4510-4514
+  # are listed individually in service.yaml and must stay in sync.
+  EXTERNAL_SERVICE_PORTS_START: "4510"
+  EXTERNAL_SERVICE_PORTS_END: "4515"

@@ -4,10 +4,11 @@ metadata:
   name: auth-service-config
   namespace: convertx
 data:
-  DB_HOST: postgres.convertx.svc.cluster.local:5432
   DB_NAME: convertx_db
+  # DB_HOST/REDIS_HOST intentionally absent: RDS and ElastiCache get
+  # dynamic ports, so endpoints are read from SecretsManager at startup
+  # (convertx/postgres/endpoint, convertx/redis/endpoint).
   DB_USER: convertx
-  REDIS_HOST: redis.kong.svc.cluster.local:6379
   PORT: "8080"
   AWS_REGION: "us-east-1"
   AWS_ENDPOINT_URL: "http://localstack.localstack.svc.cluster.local:4566"

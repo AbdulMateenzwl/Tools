@@ -8,9 +8,9 @@ config:
   day: 20
   policy: redis
   redis:
-    host: redis.kong.svc.cluster.local
-    port: 6379
-    password: yourpassword
+    host: REDIS_HOST_PLACEHOLDER
+    port: REDIS_PORT_PLACEHOLDER
+    password: REDIS_PASSWORD_PLACEHOLDER
     database: 1
     timeout: 2000
   limit_by: ip

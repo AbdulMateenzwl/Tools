@@ -4,7 +4,8 @@ metadata:
   name: conversion-service-config
   namespace: convertx
 data:
-  REDIS_HOST: redis.kong.svc.cluster.local:6379
+  # REDIS_HOST intentionally absent: the ElastiCache endpoint is read from
+  # SecretsManager (convertx/redis/endpoint) because its port is dynamic.
   PORT: "8080"
   CACHE_TTL_MINUTES: "60"
   AWS_REGION: "us-east-1"

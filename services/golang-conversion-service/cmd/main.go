@@ -25,7 +25,7 @@ func main() {
 
 	// ── Redis ──────────────────────────────────────────────────
 	rdb := redis.NewClient(&redis.Options{
-		Addr:     os.Getenv("REDIS_HOST"),
+		Addr:     s.RedisEndpoint,
 		Password: s.RedisPassword,
 	})
 	if err := rdb.Ping(ctx).Err(); err != nil {

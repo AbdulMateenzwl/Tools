@@ -90,6 +90,8 @@ ok "MetalLB deleted"
 info "Deleting PersistentVolumes..."
 kubectl delete pv postgres-pv --ignore-not-found > /dev/null
 kubectl delete pv redis-pv --ignore-not-found > /dev/null
+# LocalStack Pro persists RDS/ElastiCache data and secrets here.
+kubectl delete pv localstack-pv --ignore-not-found > /dev/null
 ok "PersistentVolumes deleted"
 
 # ── Delete Gateway API CRDs ────────────────────────────────────

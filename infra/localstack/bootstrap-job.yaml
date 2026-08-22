@@ -26,8 +26,10 @@ spec:
               value: "REDIS_PWD_PLACEHOLDER"
             - name: POSTGRES_PASSWORD
               value: "POSTGRES_PWD_PLACEHOLDER"
-            - name: JWT_SECRET
-              value: "JWT_SECRET_PLACEHOLDER"
+            # In-cluster DNS name of the Kong dataplane service. Auto-generated
+            # by the operator, so setup.sh resolves it and substitutes here.
+            - name: KONG_ORIGIN
+              value: "KONG_ORIGIN_PLACEHOLDER"
           volumeMounts:
             - name: bootstrap-script
               mountPath: /scripts

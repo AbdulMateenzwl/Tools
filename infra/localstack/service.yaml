@@ -7,10 +7,25 @@ spec:
   selector:
     app: localstack
   ports:
-    - name: main
+    - name: edge
       port: 4566
       targetPort: 4566
-    - name: ecr
+    # RDS/ElastiCache/ECR are assigned ports from EXTERNAL_SERVICE_PORTS_*.
+    # A K8s Service cannot express a range, so each port is listed explicitly.
+    # Keep this list in sync with EXTERNAL_SERVICE_PORTS_END in configmap.yaml.
+    - name: ext-4510
       port: 4510
       targetPort: 4510
-  type: ClusterIP                  # internal only — services inside K8s reach it via DNS
+    - name: ext-4511
+      port: 4511
+      targetPort: 4511
+    - name: ext-4512
+      port: 4512
+      targetPort: 4512
+    - name: ext-4513
+      port: 4513
+      targetPort: 4513
+    - name: ext-4514
+      port: 4514
+      targetPort: 4514
+  type: ClusterIP

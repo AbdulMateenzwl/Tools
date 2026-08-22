@@ -92,8 +92,24 @@ func (h *AuthHandler) GenerateAPIKey(c *gin.Context) {
 
 func (h *AuthHandler) Me(c *gin.Context) {
     userID, _ := c.Get("user_id")
-    email, _ := c.Get("email")
     role, _ := c.Get("role")
+
+    // Cognito access tokens carry no email claim, so it comes from GetUser
+    // rather than straight off the token like it used to.
+    var email string
+    if raw, ok := c.Get("access_token"); ok {
+        if token, ok := raw.(string); ok {
+            user, err := h.authService.GetUser(c.Request.Context(), token)
+            if err != nil {
+                c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})
+                return
+            }
+            email = user.Email
+            if user.Sub != "" {
+                userID = user.Sub
+            }
+        }
+    }
 
     c.JSON(http.StatusOK, gin.H{
         "id":    userID,

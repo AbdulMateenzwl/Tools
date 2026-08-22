@@ -29,3 +29,5 @@ infra/secrets-actual.sh
 
 # Logs
 *.log
+# ...but the template must be committed
+!.env.example
