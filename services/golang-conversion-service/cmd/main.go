@@ -7,6 +7,7 @@ import (
 
 	"github.com/convertx/golang-conversion-service/internal/cache"
 	"github.com/convertx/golang-conversion-service/internal/handler"
+	"github.com/convertx/golang-conversion-service/internal/metrics"
 	"github.com/convertx/golang-conversion-service/internal/secrets"
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
@@ -28,8 +29,16 @@ func main() {
 	toolsHandler := handler.NewToolsHandler()
 
 	r := gin.New()
+	// Metrics middleware goes first so it wraps Recovery: it reads the status
+	// code in a deferred call, and Recovery must have set its 500 by then.
+	r.Use(metrics.Middleware())
 	r.Use(gin.Logger())
 	r.Use(gin.Recovery())
+
+	// Deliberately at the root rather than under /api/v1: the HTTPRoute only
+	// forwards /api/v1/convert and /api/v1/tools, so this stays unreachable
+	// through Kong and is scraped by Prometheus directly on the pod IP.
+	r.GET("/metrics", metrics.Handler())
 
 	v1 := r.Group("/api/v1")
 

@@ -1,0 +1,21 @@
+# Standalone scrape config for local development.
+#
+# Deliberately NOT the cluster's config (infra/monitoring/prometheus-configmap.yaml):
+# that one discovers pods through the Kubernetes API, which does not exist here.
+# This is a plain static target pointing back at the host.
+global:
+  scrape_interval: 5s      # faster than the cluster's 15s: you want a panel to
+  evaluation_interval: 5s  # move within seconds of sending a curl by hand
+
+scrape_configs:
+  - job_name: conversion-service
+    static_configs:
+      # The service runs on the HOST via `go run`, not in a container, so
+      # Prometheus has to reach back out. host.docker.internal resolves to the
+      # host on Docker Desktop, and extra_hosts in the compose file maps it on
+      # Linux too.
+      #
+      # Change the port here if you start the service on anything but 8080.
+      - targets: ["host.docker.internal:8080"]
+        labels:
+          app: conversion-service

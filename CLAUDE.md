@@ -10,7 +10,7 @@ Backing services are AWS-emulated through **LocalStack Pro**: PostgreSQL is an R
 
 ## Setup, Test, Teardown
 
-`setup.sh` performs the entire 12-step bring-up (namespaces → MetalLB → Kong → LocalStack Pro → bootstrap job → resolve endpoints → docker builds → services → plugins → port-forward → health checks). Prefer it over the manual steps in `Readme.md`, which predate the AWS migration and are now substantially wrong.
+`setup.sh` performs the entire 14-step bring-up (namespaces → MetalLB → Kong → LocalStack Pro → bootstrap job → resolve endpoints → docker builds → services → plugins → log shipping → monitoring → port-forwards → health checks). Prefer it over the manual steps in `Readme.md`, which predate the AWS migration and are now substantially wrong.
 
 ```bash
 bash setup.sh          # full bring-up, idempotent for Kong/helm
@@ -52,7 +52,17 @@ go test ./internal/converter/ -run TestYAMLToJSON -v   # a single test
 | plain Redis | `docker compose up -d --wait` | `REDIS_HOST=localhost:6379 REDIS_PASSWORD=localdev go run ./cmd/main.go` |
 | SecretsManager | `LOCALSTACK_PORT=4567 docker compose --profile aws up -d --wait` | `AWS_ENDPOINT_URL=http://localhost:4567 AWS_REGION=us-east-1 AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test go run ./cmd/main.go` |
 
-Stop dependencies with `docker compose --profile aws down -v`.
+To see the Grafana dashboard without a cluster, add the `monitoring` profile — it runs the same Prometheus and Grafana images the cluster runs, scraping the host:
+
+```bash
+docker compose --profile monitoring up -d --wait
+go run ./cmd/main.go          # any of the three backends above
+# http://localhost:3001 — dashboard preloaded, no login
+```
+
+It mounts `infra/monitoring/dashboards/` straight from the repo root, so there is one dashboard definition rather than a copy that drifts. Ports default to **3001/9091, not 3000/9090**, because `setup.sh` leaves port-forwards on the cluster's Grafana and Prometheus — colliding would either fail to bind or silently show you cluster data.
+
+Stop dependencies with `docker compose --profile aws --profile monitoring down -v`.
 
 `services/golang-conversion-service/docker-compose.yml` starts only this service's dependencies — Redis by default, plus a LocalStack under the `aws` profile seeded with `convertx/redis/{endpoint,password}` by `dev/seed-secrets.sh`. It is scoped to the service on purpose: it carries its own compose project name, `.dockerignore` keeps it out of the image, and **the root `setup.sh` never invokes docker compose** (it builds images and applies Kubernetes manifests, where Redis is an ElastiCache cluster). Running the whole project does not touch it.
 
@@ -86,6 +96,28 @@ Symptom: auth-service CrashLoopBackOff with `ping postgres: ... connect: connect
 
 `bootstrap.sh` now TCP-checks the advertised port and rebuilds the instance if it refuses. Rebuilding is the only reliable repair; restarting LocalStack does not help.
 
+**Docker Desktop's Kubernetes must be in Kubeadm mode, not kind.** This is the single most confusing failure in this repo, because *nothing reports an error*.
+
+```bash
+docker desktop kubernetes status | grep Mode      # want: docker-desktop — NOT kind
+docker desktop kubernetes images | grep convertx  # empty in kind mode
+```
+
+In `kind` mode the node runs as a container with **its own containerd image store**, isolated from the Docker daemon. `docker build` writes to the host store, the cluster cannot see it, and `imagePullPolicy: IfNotPresent` on a `:latest` tag means the pods keep whatever image the node cached previously — indefinitely. `setup.sh` prints `✓ built`, `✓ deployed`, `✓ 200` and exits 0 the entire time, because every individual step really did succeed.
+
+Symptom: **code changes never take effect.** Confirm it in one step — run the same image two ways:
+
+```bash
+docker run --rm -p 18099:8080 convertx/conversion-service:latest   # serves the new code
+kubectl exec -n convertx deploy/conversion-service -- wget -qO- http://localhost:8080/metrics
+```
+
+If the container serves your change and the pod 404s or serves old behaviour, the image never reached the cluster. Note that deleting host containers does **not** help: the kind node's image store lives in its own persistent volume, which is also why `localstack` can show 4d uptime on a cluster that started minutes ago.
+
+Fix: Docker Desktop → Settings → Kubernetes → cluster provisioning method → **Kubeadm**. It recreates the cluster (wiping `localstack-pv`), so re-run `setup.sh` afterwards.
+
+The entire local workflow — build locally, `:latest`, `IfNotPresent`, no registry — depends on that shared image store. `scripts/push-to-ecr.sh` is the provisioner-independent alternative, at the cost of the manual `insecure-registries` setting.
+
 **Never use `kubectl wait --for=condition=ready pod --selector=...` here.** It snapshots matching pods at start and blocks indefinitely if one is later deleted. The LocalStack Deployment uses `strategy: Recreate`, and the services get a `kubectl rollout restart`, so on every re-run a watched pod disappears and the wait hangs for its full timeout — then fails the run while the workload is perfectly healthy. `setup.sh` uses `kubectl rollout status deployment/<name>` instead. The bootstrap Job wait is fine: it targets a named object, not a selector.
 
 ## Building
@@ -110,7 +142,9 @@ Deployments use `imagePullPolicy: IfNotPresent` with the `:latest` tag, so rebui
 
 **Auth Service** (`services/auth-service/`) — a thin layer over Cognito plus API key management. It no longer stores users or hashes passwords, and **no longer uses Redis at all**. RDS backs only the `api_keys` table, auto-migrated on startup (`runMigrations` in `cmd/main.go`) — there is no migration tool, so schema changes mean editing that inline SQL slice.
 
-**Conversion Service** (`services/golang-conversion-service/`) — stateless conversions and dev tools. Redis-cached, no database.
+**Conversion Service** (`services/golang-conversion-service/`) — stateless conversions and dev tools. No database.
+
+**Only the `/convert/*` routes are Redis-cached.** Caching lives in the `convert` helper in `internal/handler/convert_handler.go`, which every conversion passes through; `tools_handler.go` never touches the cache at all — base64, URL and JWT decoding are cheap pure functions where a Redis round trip would cost more than recomputing. This surprises people twice: load-testing `/tools/base64/decode` produces zero cache activity, and the Grafana cache panels stay empty no matter how much tools traffic you send.
 
 Both follow the same layout: `cmd/main.go` (wiring) → `internal/handler/` (Gin) → `internal/service/` or `internal/converter/` → `internal/repository/` (auth only) / `internal/cache/` (conversion only), plus `internal/secrets/` and `internal/model/`. Auth additionally has `internal/cognito/` (user pool operations) and `internal/jwks/` (RS256 key fetching).
 
@@ -228,6 +262,44 @@ Deliberate choices worth knowing before editing the config:
 A DaemonSet does not restart when its ConfigMap changes, so `setup.sh` issues an explicit `kubectl rollout restart daemonset/fluent-bit`. Do the same after editing the config by hand.
 
 Read logs back with `bash scripts/tail-logs.sh <group> [minutes]`. An empty group with fluent-bit running usually means delivery is failing — check `kubectl logs -n convertx -l app=fluent-bit`.
+
+### Metrics (Prometheus + Grafana)
+
+`infra/monitoring/` runs Prometheus and Grafana in a `monitoring` namespace. This is the second observability path alongside fluent-bit → CloudWatch, and the split is deliberate: **metrics alert, logs explain.** CloudWatch keeps the logs; Prometheus keeps the numbers.
+
+Only the **conversion service** is instrumented so far. `internal/metrics/` holds the collectors and a Gin middleware; auth-service has no `/metrics` endpoint yet.
+
+| Metric | Labels | Notes |
+|---|---|---|
+| `convertx_http_requests_total` | method, route, status | |
+| `convertx_http_request_duration_seconds` | method, route | End to end, cache hits included |
+| `convertx_http_requests_in_flight` | — | Not on the dashboard yet |
+| `convertx_conversion_cache_operations_total` | operation, result | hit / miss — `/convert/*` only, never `/tools/*` |
+| `convertx_conversions_total` | operation, result | Cache misses only — a hit never reaches the converter |
+| `convertx_conversion_duration_seconds` | operation | Converter function alone, excludes Redis |
+| `convertx_conversion_input_bytes` | operation | Against the 1MB cap |
+
+Go runtime and process collectors come free from the default registry.
+
+Things that will bite you if you assume otherwise:
+
+- **`/metrics` is served at the root, not under `/api/v1`.** The HTTPRoute forwards only `/api/v1/convert` and `/api/v1/tools`, so the endpoint is unreachable through Kong and needs no plugin exemption. Prometheus scrapes the pod IP directly.
+- **The route label is `c.FullPath()`, the Gin route template — never the raw URL.** Requests that match no route collapse into a single `unmatched` series. Labelling 404s with their real path would let any caller mint unbounded label values by hitting random URLs, which is the standard way to exhaust a Prometheus server's memory. There is a test pinning this.
+- **The metrics middleware is registered ahead of `gin.Recovery()`.** It reads the status code in a deferred call, so Recovery has to run *inside* it; reverse the order and every panic records as a 200.
+- **Discovery is annotation-driven.** A pod opts in with `prometheus.io/scrape` on its **pod template** (not the Service). Instrumenting auth-service therefore needs no change to `prometheus.yml` — just the three annotations.
+- **RBAC is a namespaced Role, not a ClusterRole.** `kubernetes_sd_configs` issues namespaced list/watch calls when the SD config names its namespaces, so a `Role` in `convertx` granting `get/list/watch` on `pods` is sufficient. The usual ClusterRole would let Prometheus read the full pod spec of every pod in the cluster — including env vars and mounted Secret *names* — which it does not need. This is the only component in the cluster that talks to the Kubernetes API; fluent-bit deliberately still does not.
+- **`kong` is intentionally excluded from the Role and the SD config.** The dataplane exposes no Prometheus metrics until Kong's `prometheus` plugin is enabled. Adding it means a matching Role + RoleBinding in `kong` plus a second entry under `namespaces:`.
+- **Both use `emptyDir`.** Prometheus keeps 7 days (matching the CloudWatch log group retention) but loses all of it on pod restart. Grafana's sqlite state is disposable because datasources and dashboards are provisioned from ConfigMaps.
+- **No cache traffic renders as "no traffic", not 0%.** The hit-rate queries divide without a `clamp_min` guard on purpose. Clamping the denominator turns an idle cache into a confident `0%`, which is indistinguishable from every lookup missing — a genuinely misleading reading that cost real debugging time once. A bare `0/0` yields NaN, and the panels are set to say so.
+- **Grafana has anonymous viewer access and admin/admin.** Safe only because it is reachable exclusively through a port-forward — there is no ingress and no Kong route. Move the credentials to a Secret before exposing it anywhere.
+
+**Dashboards are generated from `infra/monitoring/dashboards/*.json` with `--from-file`**, the same single-source-of-truth pattern as `bootstrap.sh`. Editing the ConfigMap directly is pointless; the next `setup.sh` overwrites it. `allowUiUpdates: true`, so you can iterate on a panel in the UI and copy the JSON back into the file.
+
+Neither Deployment rolls on a ConfigMap change, so `setup.sh` issues explicit `kubectl rollout restart`s. Prometheus also runs with `--web.enable-lifecycle`, so a config reload without losing the TSDB is `curl -X POST localhost:9090/-/reload`.
+
+Access after `setup.sh`: Grafana on `localhost:3000`, Prometheus on `localhost:9090` (`/targets` shows what is being scraped).
+
+The same dashboard also runs without a cluster via the conversion service's `monitoring` compose profile — see "Running the conversion service alone". That works because no panel query references `pod` or `namespace`; every label the dashboard uses (`route`, `operation`, `status`, `le`) is emitted by the service itself, so the JSON is portable between the two environments unchanged.
 
 ### CDN (CloudFront)
 

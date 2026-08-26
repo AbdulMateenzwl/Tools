@@ -292,20 +292,63 @@ else
   echo "     kubectl logs -n convertx -l app=fluent-bit --tail=30"
 fi
 
-# ── Step 12: Port Forward ──────────────────────────────────────
+# ── Step 12: Monitoring (Prometheus + Grafana) ─────────────────
+# Prometheus discovers targets from the Kubernetes API, which is the only
+# component here that does. The grant is a namespaced Role in `convertx` rather
+# than a ClusterRole — see the comment at the top of prometheus-rbac.yaml.
 echo ""
-echo "▶ Step 12: Starting port forward..."
+echo "▶ Step 12: Deploying monitoring stack..."
+kubectl apply -f infra/monitoring/prometheus-rbac.yaml > /dev/null
+kubectl apply -f infra/monitoring/prometheus-configmap.yaml > /dev/null
+kubectl apply -f infra/monitoring/prometheus-deployment.yaml > /dev/null
+
+# Dashboards are generated from the JSON on disk rather than checked in as a
+# ConfigMap, so the JSON stays the single source of truth — the same reason
+# bootstrap.sh is built with --from-file in step 5.
+kubectl create configmap grafana-dashboards \
+  --from-file=infra/monitoring/dashboards/ \
+  -n monitoring --dry-run=client -o yaml | kubectl apply -f - > /dev/null
+
+kubectl apply -f infra/monitoring/grafana-config.yaml > /dev/null
+kubectl apply -f infra/monitoring/grafana-deployment.yaml > /dev/null
+
+# Neither Deployment rolls on a ConfigMap edit by itself.
+kubectl rollout restart deployment/prometheus -n monitoring > /dev/null 2>&1 || true
+kubectl rollout restart deployment/grafana -n monitoring > /dev/null 2>&1 || true
+
+if kubectl rollout status deployment/prometheus -n monitoring --timeout=120s > /dev/null 2>&1; then
+  ok "Prometheus running"
+else
+  echo -e "  ${YELLOW}!${NC} Prometheus not ready — no metrics will be collected"
+  echo "     kubectl logs -n monitoring -l app=prometheus --tail=30"
+fi
+
+if kubectl rollout status deployment/grafana -n monitoring --timeout=120s > /dev/null 2>&1; then
+  ok "Grafana provisioned with ConvertX dashboard"
+else
+  echo -e "  ${YELLOW}!${NC} Grafana not ready"
+  echo "     kubectl logs -n monitoring -l app=grafana --tail=30"
+fi
+
+# ── Step 13: Port Forward ──────────────────────────────────────
+echo ""
+echo "▶ Step 13: Starting port forward..."
 pkill -f "port-forward" 2>/dev/null || true
 sleep 2
 
 # KONG_SVC was resolved in step 3.
 kubectl port-forward svc/$KONG_SVC 8080:80 -n kong > /dev/null 2>&1 &
-sleep 3
-ok "Port forward active on localhost:8080"
 
-# ── Step 13: Health Checks ─────────────────────────────────────
+# Grafana and Prometheus are reachable only this way: neither has an ingress
+# nor a Kong route, which is what keeps the unauthenticated Grafana safe.
+kubectl port-forward svc/grafana 3000:3000 -n monitoring > /dev/null 2>&1 &
+kubectl port-forward svc/prometheus 9090:9090 -n monitoring > /dev/null 2>&1 &
+sleep 3
+ok "Port forwards active on localhost:8080 (api), :3000 (grafana), :9090 (prometheus)"
+
+# ── Step 14: Health Checks ─────────────────────────────────────
 echo ""
-echo "▶ Step 13: Running health checks..."
+echo "▶ Step 14: Running health checks..."
 
 AUTH_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
   http://localhost:8080/api/v1/auth/health)
@@ -338,6 +381,9 @@ echo ""
 echo "  RDS:         $DB_ENDPOINT"
 echo "  ElastiCache: $REDIS_ENDPOINT"
 echo "  Log groups:  /convertx/auth-service  /convertx/conversion-service  /convertx/kong"
+echo ""
+echo "  Grafana:     http://localhost:3000  (anonymous viewer; admin/admin to edit)"
+echo "  Prometheus:  http://localhost:9090  (targets: /targets)"
 
 CDN_DOMAIN=$(get_secret convertx/cloudfront/domain)
 if [ -n "$CDN_DOMAIN" ]; then

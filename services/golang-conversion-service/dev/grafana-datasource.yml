@@ -1,0 +1,12 @@
+# Same uid as the cluster's provisioning (infra/monitoring/grafana-config.yaml),
+# which is what lets the identical dashboard JSON bind in both environments.
+apiVersion: 1
+datasources:
+  - name: Prometheus
+    type: prometheus
+    uid: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    jsonData:
+      timeInterval: 5s

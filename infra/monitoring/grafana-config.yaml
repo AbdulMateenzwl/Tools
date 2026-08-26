@@ -1,0 +1,47 @@
+# Datasource and dashboard *provisioning* — both are read by Grafana at startup
+# from /etc/grafana/provisioning, so the stack comes up already wired instead of
+# needing anyone to click through the UI. Dashboards defined this way are also
+# reproducible: teardown and setup produce the identical dashboard.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-datasources
+  namespace: monitoring
+data:
+  datasources.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        # Explicit uid so the provisioned dashboards can bind to this
+        # datasource by name; Grafana would otherwise generate a random one and
+        # every panel would come up as "Datasource not found".
+        uid: prometheus
+        access: proxy
+        url: http://prometheus.monitoring.svc.cluster.local:9090
+        isDefault: true
+        # Must not be shorter than Prometheus's 15s scrape_interval, or graphs
+        # render with gaps where no sample exists yet.
+        jsonData:
+          timeInterval: 15s
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-provider
+  namespace: monitoring
+data:
+  dashboards.yaml: |
+    apiVersion: 1
+    providers:
+      - name: convertx
+        orgId: 1
+        folder: ConvertX
+        type: file
+        disableDeletion: false
+        # Lets edits made in the UI stick until the next pod restart, which is
+        # how you iterate on a panel before copying the JSON back into git.
+        allowUiUpdates: true
+        options:
+          path: /var/lib/grafana/dashboards

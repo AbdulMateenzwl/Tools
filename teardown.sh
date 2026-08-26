@@ -39,6 +39,13 @@ info "Deleting convertx namespace..."
 kubectl delete namespace convertx --ignore-not-found > /dev/null
 ok "convertx namespace deleted"
 
+# ── Delete monitoring ──────────────────────────────────────────
+# The Role and RoleBinding live in `convertx` and went with the namespace above;
+# this removes Prometheus, Grafana and the ServiceAccount.
+info "Deleting monitoring namespace..."
+kubectl delete namespace monitoring --ignore-not-found > /dev/null
+ok "monitoring namespace deleted"
+
 # ── Delete LocalStack ──────────────────────────────────────────
 info "Deleting LocalStack..."
 kubectl delete namespace localstack --ignore-not-found > /dev/null

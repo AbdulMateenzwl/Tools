@@ -26,7 +26,12 @@
 #        AWS_ENDPOINT_URL=http://localhost:4567 AWS_REGION=us-east-1 \
 #          AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test go run ./cmd/main.go
 #
-#   stop:  docker compose --profile aws down -v
+#   4. with Prometheus + Grafana, to see the dashboard without a cluster
+#        docker compose --profile monitoring up -d --wait
+#        go run ./cmd/main.go
+#      then open http://localhost:3001 (anonymous; the dashboard is preloaded)
+#
+#   stop:  docker compose --profile aws --profile monitoring down -v
 
 name: convertx-conversion-dev
 
@@ -77,6 +82,67 @@ services:
       - ./dev/seed-secrets.sh:/etc/localstack/init/ready.d/seed-secrets.sh:ro
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:4566/_localstack/health || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  # ── Monitoring profile ───────────────────────────────────────────────────
+  # Runs the same Prometheus + Grafana pair the cluster runs, against the
+  # service on the host, so a dashboard change can be checked in seconds
+  # instead of through a full setup.sh.
+  #
+  # Ports default to 3001/9091, NOT 3000/9090: setup.sh leaves port-forwards
+  # running on the cluster's Grafana and Prometheus, and colliding with them
+  # would either fail to bind or — worse — leave you looking at the cluster's
+  # data while thinking it is local. Same lesson as LOCALSTACK_PORT above.
+  prometheus:
+    profiles: ["monitoring"]
+    image: prom/prometheus:v3.7.1
+    container_name: convertx-dev-prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.enable-lifecycle
+    ports:
+      - "${PROMETHEUS_PORT:-9091}:9090"
+    volumes:
+      - ./dev/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    extra_hosts:
+      # No-op on Docker Desktop, which defines this already; required on Linux.
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:9090/-/healthy || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  grafana:
+    profiles: ["monitoring"]
+    image: grafana/grafana:12.2.1
+    container_name: convertx-dev-grafana
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+    ports:
+      - "${GRAFANA_PORT:-3001}:3000"
+    volumes:
+      - ./dev/grafana-datasource.yml:/etc/grafana/provisioning/datasources/ds.yml:ro
+      - ./dev/grafana-dashboards.yml:/etc/grafana/provisioning/dashboards/dash.yml:ro
+      # Reaches up to the repo-root dashboards on purpose: one definition, used
+      # by both the cluster and this compose file. A copy here would drift, and
+      # you would not notice until a panel was wrong in only one of them.
+      - ../../infra/monitoring/dashboards:/var/lib/grafana/dashboards:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:3000/api/health || exit 1"]
       interval: 5s
       timeout: 3s
       retries: 10

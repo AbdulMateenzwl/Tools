@@ -12,6 +12,13 @@ spec:
     metadata:
       labels:
         app: conversion-service
+      annotations:
+        # Scraped on the app port: /metrics is served by the same Gin engine but
+        # sits outside /api/v1, so Kong never routes to it and it is reachable
+        # only from inside the cluster.
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
     spec:
       containers:
         - name: conversion-service

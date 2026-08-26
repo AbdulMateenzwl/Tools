@@ -1,0 +1,49 @@
+# Prometheus is the first component in this cluster that talks to the Kubernetes
+# API, and it only does so to discover scrape targets: pod IPs change on every
+# restart, so a static target list would go stale immediately.
+#
+# The grant is deliberately a namespaced Role rather than the ClusterRole most
+# guides hand out. Prometheus's kubernetes_sd_configs issues *namespaced*
+# list/watch calls when the SD config names its namespaces, so a plain Role in
+# `convertx` is sufficient — and kube-system, localstack and kong stay invisible
+# to it. Widening this to a ClusterRole would let Prometheus read the full pod
+# spec of every pod in the cluster, which it has no need for.
+#
+# `kong` is intentionally NOT included: the Kong dataplane exposes no Prometheus
+# metrics until its prometheus plugin is enabled, so granting access there now
+# would be privilege without purpose. Add a matching Role + RoleBinding and a
+# second entry under `namespaces:` in prometheus.yml when that plugin lands.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: prometheus
+  namespace: monitoring
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: prometheus-pod-reader
+  namespace: convertx
+rules:
+  # `pods` alone is enough for role: pod discovery. Endpoints and services would
+  # only be needed for role: endpoints / role: service, which this setup does
+  # not use — annotation-based pod discovery covers every target here.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: prometheus-pod-reader
+  namespace: convertx
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: prometheus-pod-reader
+subjects:
+  - kind: ServiceAccount
+    name: prometheus
+    namespace: monitoring

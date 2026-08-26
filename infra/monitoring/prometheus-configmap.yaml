@@ -1,0 +1,62 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: monitoring
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+      external_labels:
+        cluster: convertx
+
+    scrape_configs:
+      # Annotation-driven discovery. A service opts in by setting
+      # prometheus.io/scrape on its pod template — which means instrumenting
+      # auth-service later needs no change to this file at all.
+      - job_name: convertx-pods
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names:
+                - convertx
+
+        relabel_configs:
+          # Opt-in only: pods without the annotation are dropped, so fluent-bit
+          # and anything else in the namespace is not scraped for a /metrics
+          # endpoint it does not serve.
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+            action: keep
+            regex: "true"
+
+          # Never scrape a pod that is not running — terminating pods otherwise
+          # produce a burst of connection-refused errors on every rollout.
+          - source_labels: [__meta_kubernetes_pod_phase]
+            action: drop
+            regex: (Pending|Succeeded|Failed)
+
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+            action: replace
+            target_label: __metrics_path__
+            regex: (.+)
+
+          # Swap the discovered container port for the annotated metrics port.
+          - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+            action: replace
+            regex: ([^:]+)(?::\d+)?;(\d+)
+            replacement: $1:$2
+            target_label: __address__
+
+          # Carry pod identity into the series. `pod` is what makes counters
+          # from the two conversion-service replicas distinguishable — without
+          # it they would collide and look like constant counter resets.
+          - source_labels: [__meta_kubernetes_namespace]
+            action: replace
+            target_label: namespace
+          - source_labels: [__meta_kubernetes_pod_name]
+            action: replace
+            target_label: pod
+          - source_labels: [__meta_kubernetes_pod_label_app]
+            action: replace
+            target_label: app

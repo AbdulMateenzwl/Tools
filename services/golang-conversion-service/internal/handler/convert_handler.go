@@ -2,9 +2,11 @@ package handler
 
 import (
     "net/http"
+    "time"
 
     "github.com/convertx/golang-conversion-service/internal/cache"
     "github.com/convertx/golang-conversion-service/internal/converter"
+    "github.com/convertx/golang-conversion-service/internal/metrics"
     "github.com/convertx/golang-conversion-service/internal/model"
     "github.com/gin-gonic/gin"
 )
@@ -31,15 +33,22 @@ func (h *ConvertHandler) convert(
         return
     }
 
+    metrics.RecordInputSize(operation, len(req.Input))
+
     // Check cache first
     key := cache.Key(operation, req.Input)
     if cached, ok := h.cache.Get(c.Request.Context(), key); ok {
+        metrics.RecordCacheResult(operation, true)
         c.JSON(http.StatusOK, model.ConvertResponse{Output: cached, Cached: true})
         return
     }
+    metrics.RecordCacheResult(operation, false)
 
-    // Run conversion
+    // Run conversion. Timed separately from the HTTP request so a slow
+    // converter can be told apart from a slow Redis.
+    start := time.Now()
     output, err := fn(req.Input)
+    metrics.RecordConversion(operation, err, time.Since(start))
     if err != nil {
         c.JSON(http.StatusBadRequest, model.ErrorResponse{Error: err.Error()})
         return
