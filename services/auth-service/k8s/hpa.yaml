@@ -1,0 +1,40 @@
+# Horizontal autoscaling for the auth service.
+#
+# Included for symmetry, but be aware CPU is a WEAK signal here: this service
+# spends most of its time waiting on Cognito and RDS, not burning CPU, so it
+# will usually sit at minReplicas even under load that saturates its latency.
+# Scaling it meaningfully needs a concurrency or request-rate metric via
+# prometheus-adapter, which is not installed. Do not read "auth stayed at 2"
+# during a load test as a broken HPA — it is the expected result.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: auth-service
+  namespace: convertx
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: auth-service
+  minReplicas: 2
+  maxReplicas: 6
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies:
+        - type: Pods
+          value: 2
+          periodSeconds: 30
+    scaleDown:
+      stabilizationWindowSeconds: 60
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 60

@@ -4,7 +4,9 @@ metadata:
   name: auth-service
   namespace: convertx
 spec:
-  replicas: 2
+  # No `replicas:` — the HorizontalPodAutoscaler in hpa.yaml owns this. If it
+  # were set here, every `kubectl apply` would reset the count and fight the
+  # HPA for control of it.
   selector:
     matchLabels:
       app: auth-service

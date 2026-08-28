@@ -42,8 +42,8 @@ Kong Gateway Operator (L7)      ← routing, auth, rate limiting
     ┌─────────┼──────────────────┐
     ▼         ▼                  ▼
 PostgreSQL  Redis           LocalStack
-(users,     (cache,         (S3, SQS,
- api keys)   rate limits,    SecretsManager)
+(users,     (cache,         (SecretsManager,
+ api keys)   rate limits,    Cognito, ECR)
              sessions)
 ```
 
@@ -62,8 +62,6 @@ PostgreSQL  Redis           LocalStack
 | Frontend | Angular 18 with SSR (planned) |
 | Database | PostgreSQL 16 |
 | Cache | Redis 7.2 |
-| File Storage | AWS S3 / LocalStack S3 |
-| Job Queue | AWS SQS / LocalStack SQS |
 | Secrets | AWS SecretsManager / LocalStack SecretsManager |
 | Container Orchestration | Kubernetes 1.31 |
 | Local AWS Emulation | LocalStack 3.4 (community) |
@@ -244,7 +242,7 @@ kubectl wait --namespace localstack \
 
 ### Step 8 — Run LocalStack Bootstrap
 
-This creates all secrets in SecretsManager, S3 buckets, and SQS queues.
+This creates all secrets in SecretsManager, plus RDS, ElastiCache, Cognito and ECR.
 
 ```bash
 kubectl cp infra/localstack/bootstrap.sh \

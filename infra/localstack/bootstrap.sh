@@ -341,34 +341,6 @@ CFJSON
   fi
 fi
 
-# ─── S3 Buckets ───────────────────────────────────────────────
-
-echo "Creating S3 buckets..."
-
-$AWS s3api create-bucket --bucket convertx-files >/dev/null 2>&1 || true
-echo "  ✓ convertx-files bucket"
-
-$AWS s3api put-bucket-lifecycle-configuration \
-  --bucket convertx-files \
-  --lifecycle-configuration '{
-    "Rules": [{
-      "ID": "auto-delete-1h",
-      "Status": "Enabled",
-      "Expiration": {"Days": 1},
-      "Filter": {"Prefix": ""}
-    }]
-  }' >/dev/null 2>&1 || true
-echo "  ✓ convertx-files lifecycle rule set"
-
-# ─── SQS Queues ───────────────────────────────────────────────
-
-echo "Creating SQS queues..."
-
-for QUEUE in convertx-document-jobs convertx-image-jobs convertx-dead-letter; do
-  $AWS sqs create-queue --queue-name "$QUEUE" >/dev/null 2>&1 || true
-  echo "  ✓ $QUEUE queue"
-done
-
 # ─── Verify ───────────────────────────────────────────────────
 
 echo ""
@@ -394,12 +366,6 @@ $AWS ecr describe-repositories --query 'repositories[].repositoryName' --output 
 
 echo "CloudFront:"
 $AWS cloudfront list-distributions   --query 'DistributionList.Items[].[Id,Comment,Status]' --output table 2>/dev/null || echo "  (none)"
-
-echo "S3 Buckets:"
-$AWS s3api list-buckets --query 'Buckets[].Name' --output table
-
-echo "SQS Queues:"
-$AWS sqs list-queues --output table
 
 echo ""
 echo "=== Bootstrap Complete ==="

@@ -1,0 +1,57 @@
+# Horizontal autoscaling for the conversion service.
+#
+# This service is the right candidate for CPU-based scaling: conversions are
+# genuinely CPU-bound (JSON/XML/YAML parsing and re-serialising), and the
+# replicas are interchangeable because the cache lives in ElastiCache rather
+# than in-process — so a pod added under load is immediately as useful as a
+# warm one, with no cold-cache penalty.
+#
+# NOTE: the Deployment deliberately has NO `replicas:` field. If it did, every
+# `kubectl apply` would reset the count and fight the HPA for control. Leaving
+# it out lets the HPA own the number outright.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: conversion-service
+  namespace: convertx
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: conversion-service
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          # Percentage of the *request* (100m), NOT the limit (500m). At 70%
+          # this scales out at ~70m average CPU while a pod may burn up to
+          # 500m before being throttled — deliberately eager, so scale-out
+          # happens well before latency degrades. Raise it toward 150-200% to
+          # pack pods harder at the cost of slower reaction.
+          averageUtilization: 70
+  behavior:
+    scaleUp:
+      # React immediately; the default 0s window is what we want under a
+      # sudden load spike.
+      stabilizationWindowSeconds: 0
+      policies:
+        - type: Percent
+          value: 100          # at most double
+          periodSeconds: 30
+        - type: Pods
+          value: 4            # ...and never more than 4 pods at once
+          periodSeconds: 30
+      selectPolicy: Max
+    scaleDown:
+      # Kubernetes defaults to 300s here. Shortened to 60s so a load test
+      # finishes in a watchable amount of time; production would want the
+      # longer window to avoid flapping on bursty traffic.
+      stabilizationWindowSeconds: 60
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 60

@@ -78,7 +78,8 @@ func main() {
 
 	// ── Router ─────────────────────────────────────────────────
 	r := gin.New()
-	r.MaxMultipartMemory = 1 << 20 // 1MB
+	// The 1MB cap that actually applies: no handler reads a file, so every
+	// request body is JSON and MaxBytesReader is the only limit that matters.
 	r.Use(func(c *gin.Context) {
 		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 1<<20)
 		c.Next()

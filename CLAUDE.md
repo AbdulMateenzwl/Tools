@@ -150,13 +150,9 @@ Both follow the same layout: `cmd/main.go` (wiring) → `internal/handler/` (Gin
 
 ### Provisioned but Unused (intentional)
 
-`bootstrap.sh` creates an S3 bucket (`convertx-files`, with a 1-day lifecycle rule) and three SQS queues (`convertx-document-jobs`, `convertx-image-jobs`, `convertx-dead-letter`). **No code touches any of them** — neither service imports the S3 or SQS SDK, and there is no file-upload path anywhere; every handler is synchronous JSON in/JSON out.
+The CloudFront distribution is correctly configured and not merely stubbed, but no traffic is routed through it yet. See CDN (CloudFront) below.
 
-They are staged for the planned Document and Image services. This is deliberate, not an oversight — don't go looking for the code path. Adding S3 or SQS usage means building new capability, not wiring up something half-finished.
-
-The CloudFront distribution is a related but separate case: it is correctly configured and not merely stubbed, but no traffic is routed through it yet. See CDN (CloudFront) below.
-
-Related: `r.MaxMultipartMemory = 1 << 20` in the auth service's `main.go` is a gin default that is never exercised, since no handler reads a file.
+**S3 and SQS were removed** (previously `convertx-files` plus three job queues). They were staged for planned Document and Image services; that scope was dropped, so `bootstrap.sh` no longer creates them and LocalStack no longer loads those services. The project is deliberately scoped to synchronous JSON in/JSON out — every handler is request/response with no file upload path and no async work. Reintroducing either means building new capability, not re-enabling something.
 
 ### Secret Fetching Pattern
 
@@ -301,6 +297,39 @@ Access after `setup.sh`: Grafana on `localhost:3000`, Prometheus on `localhost:9
 
 The same dashboard also runs without a cluster via the conversion service's `monitoring` compose profile — see "Running the conversion service alone". That works because no panel query references `pod` or `namespace`; every label the dashboard uses (`route`, `operation`, `status`, `le`) is emitted by the service itself, so the JSON is portable between the two environments unchanged.
 
+### Autoscaling
+
+Both services are scaled by a `HorizontalPodAutoscaler` (`services/*/k8s/hpa.yaml`), backed by metrics-server installed in step 12 of `setup.sh`.
+
+| | min | max | target |
+|---|---|---|---|
+| conversion-service | 2 | 10 | 70% CPU |
+| auth-service | 2 | 6 | 70% CPU |
+
+**The Deployments deliberately have no `replicas:` field.** The HPA owns the replica count; leaving `replicas:` in the manifest means every `kubectl apply` resets it and fights the HPA. If you re-add it, autoscaling will appear to work and then silently snap back on the next setup run.
+
+**`averageUtilization` is a percentage of the CPU *request* (100m), not the limit (500m).** At 70% a pod scales out at ~70m while it could burn 500m before being throttled, which is deliberately eager — scale-out lands before latency degrades. Raise the target toward 150–200% to pack pods harder at the cost of slower reaction.
+
+**metrics-server needs `--kubelet-insecure-tls` on Docker Desktop.** The kubelet serves its metrics endpoint with a cert that is not signed by the cluster CA, so without the flag every scrape fails with `x509: cannot validate certificate` and the HPAs sit at `<unknown>` forever — which looks exactly like a broken autoscaler. `setup.sh` patches the flag in after applying the upstream manifest. It is a local-cluster concession and must be dropped on real infrastructure.
+
+**Auth-service will usually not scale, and that is correct.** It spends its time waiting on Cognito and RDS rather than burning CPU, so CPU is a weak signal for it. Meaningful scaling there needs a concurrency or request-rate metric via prometheus-adapter, which is not installed. Do not read "auth stayed at 2" during a load test as a bug.
+
+Scale-down stabilisation is shortened to 60s (Kubernetes defaults to 300s) so a load test finishes in a watchable time. Production would want the longer window to avoid flapping.
+
+### Load Testing
+
+`bash tests/load-test.sh [DURATION_SECONDS] [CONCURRENCY]` (default 180s / 12) drives the conversion service and reports how the HPA responded, with a scale timeline.
+
+Two properties of this stack will silently invalidate a naive load test. The script handles both, and anything hand-rolled must too:
+
+- **Kong's rate limit is 20 requests per _day_ per IP.** At load that budget is gone in under a second and everything after is a 429 rejected at the gateway — pod CPU stays flat and the HPA never moves. The script raises the plugin's limit for the run and restores it on exit, including on Ctrl-C via a trap. If it is ever killed with `SIGKILL`, restore by hand:
+  ```bash
+  kubectl patch kongplugin rate-limiting-anonymous -n convertx --type=merge -p '{"config":{"day":20}}'
+  ```
+- **The cache would absorb the load.** Repeating one payload makes every subsequent request a Redis lookup costing almost no CPU. Each request carries a unique id so it is a guaranteed cache miss that actually runs the converter. A load test here is deliberately the pathological case for the cache — that is the point, since the goal is generating CPU, not measuring hit rate.
+
+Payloads are ~13KB (150-element JSON array), converting in ~6.5ms. Crossing 70% of a 100m request takes roughly 21 req/s across two pods.
+
 ### CDN (CloudFront)
 
 `bootstrap.sh` creates a distribution commented `convertx-api` with the Kong dataplane as its single origin. **It caches nothing, deliberately.**
@@ -315,7 +344,7 @@ The config uses the legacy `ForwardedValues` form rather than a managed `CachePo
 
 Distribution id and domain land in `convertx/cloudfront/distribution_id` and `convertx/cloudfront/domain`.
 
-**Traffic is not routed through it.** The port-forward still goes straight to Kong, and the distribution domain does not resolve locally, so the CDN is provisioned and correctly configured but not in the request path. It becomes load-bearing when there is something worth caching — static frontend assets, or converted files served from the `convertx-files` bucket.
+**Traffic is not routed through it.** The port-forward still goes straight to Kong, and the distribution domain does not resolve locally, so the CDN is provisioned and correctly configured but not in the request path. It becomes load-bearing when there is something worth caching — static frontend assets, for instance. There is no file storage to serve from.
 
 ### Access
 

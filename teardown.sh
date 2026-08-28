@@ -39,6 +39,13 @@ info "Deleting convertx namespace..."
 kubectl delete namespace convertx --ignore-not-found > /dev/null
 ok "convertx namespace deleted"
 
+# ── Delete metrics-server ──────────────────────────────────────
+# Lives in kube-system, so it does not go with a namespace deletion.
+info "Deleting metrics-server..."
+kubectl delete -f https://github.com/kubernetes-sigs/metrics-server/releases/download/v0.7.2/components.yaml \
+  --ignore-not-found > /dev/null 2>&1 || true
+ok "metrics-server deleted"
+
 # ── Delete monitoring ──────────────────────────────────────────
 # The Role and RoleBinding live in `convertx` and went with the namespace above;
 # this removes Prometheus, Grafana and the ServiceAccount.

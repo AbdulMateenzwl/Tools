@@ -6,7 +6,7 @@ metadata:
 data:
   # Pro services. rds + elasticache run REAL postgres/redis processes inside
   # the LocalStack container, which is why they replace the StatefulSet/Deployment.
-  SERVICES: "s3,sqs,secretsmanager,ecr,rds,elasticache,logs,cloudwatch,cognito-idp,cloudfront,iam,sts"
+  SERVICES: "secretsmanager,ecr,rds,elasticache,logs,cloudwatch,cognito-idp,cloudfront,iam,sts"
   DEBUG: "0"
   DEFAULT_REGION: "us-east-1"
 

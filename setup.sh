@@ -144,7 +144,7 @@ LOCALSTACK_POD=$(kubectl get pod -n localstack -l app=localstack \
 
 # ── Step 5: Bootstrap AWS resources ───────────────────────────
 echo ""
-echo "▶ Step 5: Provisioning AWS resources (RDS, ElastiCache, ECR, S3, SQS)..."
+echo "▶ Step 5: Provisioning AWS resources (RDS, ElastiCache, ECR, Cognito)..."
 
 # ConfigMap is generated from bootstrap.sh so the script has a single source.
 kubectl create configmap localstack-bootstrap \
@@ -219,6 +219,7 @@ kubectl apply -f services/auth-service/k8s/configmap.yaml > /dev/null
 kubectl apply -f services/auth-service/k8s/deployment.yaml > /dev/null
 kubectl apply -f services/auth-service/k8s/service.yaml > /dev/null
 kubectl apply -f services/auth-service/k8s/httproute.yaml > /dev/null
+kubectl apply -f services/auth-service/k8s/hpa.yaml > /dev/null
 
 # Force a fresh pull of :latest and pick up any endpoint changes.
 kubectl rollout restart deployment/auth-service -n convertx > /dev/null 2>&1 || true
@@ -233,6 +234,7 @@ kubectl apply -f services/golang-conversion-service/k8s/configmap.yaml > /dev/nu
 kubectl apply -f services/golang-conversion-service/k8s/deployment.yaml > /dev/null
 kubectl apply -f services/golang-conversion-service/k8s/service.yaml > /dev/null
 kubectl apply -f services/golang-conversion-service/k8s/httproute.yaml > /dev/null
+kubectl apply -f services/golang-conversion-service/k8s/hpa.yaml > /dev/null
 
 kubectl rollout restart deployment/conversion-service -n convertx > /dev/null 2>&1 || true
 
@@ -292,12 +294,31 @@ else
   echo "     kubectl logs -n convertx -l app=fluent-bit --tail=30"
 fi
 
-# ── Step 12: Monitoring (Prometheus + Grafana) ─────────────────
+# ── Step 12: Monitoring + autoscaling ──────────────────────────
 # Prometheus discovers targets from the Kubernetes API, which is the only
 # component here that does. The grant is a namespaced Role in `convertx` rather
 # than a ClusterRole — see the comment at the top of prometheus-rbac.yaml.
 echo ""
-echo "▶ Step 12: Deploying monitoring stack..."
+echo "▶ Step 12: Deploying monitoring and autoscaling..."
+
+# metrics-server backs the HPAs applied in steps 8-9. Docker Desktop's kubelet
+# serves its metrics endpoint with a self-signed cert that is not in the
+# cluster CA, so --kubelet-insecure-tls is REQUIRED here or every scrape fails
+# with "x509: cannot validate certificate" and the HPAs sit at <unknown>
+# forever. That flag is a local-cluster concession; on real infrastructure the
+# kubelet cert is properly signed and it must be dropped.
+kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/download/v0.7.2/components.yaml > /dev/null
+kubectl patch deployment metrics-server -n kube-system --type=json \
+  -p='[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-insecure-tls"}]' \
+  > /dev/null 2>&1 || true
+
+if kubectl rollout status deployment/metrics-server -n kube-system --timeout=120s > /dev/null 2>&1; then
+  ok "metrics-server ready (HPAs can read CPU)"
+else
+  echo -e "  ${YELLOW}!${NC} metrics-server not ready — HPAs will report <unknown> and never scale"
+  echo "     kubectl logs -n kube-system -l k8s-app=metrics-server --tail=30"
+fi
+
 kubectl apply -f infra/monitoring/prometheus-rbac.yaml > /dev/null
 kubectl apply -f infra/monitoring/prometheus-configmap.yaml > /dev/null
 kubectl apply -f infra/monitoring/prometheus-deployment.yaml > /dev/null
@@ -381,6 +402,8 @@ echo ""
 echo "  RDS:         $DB_ENDPOINT"
 echo "  ElastiCache: $REDIS_ENDPOINT"
 echo "  Log groups:  /convertx/auth-service  /convertx/conversion-service  /convertx/kong"
+echo ""
+echo "  Autoscaling: kubectl get hpa -n convertx -w"
 echo ""
 echo "  Grafana:     http://localhost:3000  (anonymous viewer; admin/admin to edit)"
 echo "  Prometheus:  http://localhost:9090  (targets: /targets)"

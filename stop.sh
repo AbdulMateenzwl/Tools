@@ -14,8 +14,8 @@
 #
 # NOTE: RDS data does not survive a stop. LocalStack reassigns the external
 # port on restore and leaves a dead proxy, so bootstrap.sh rebuilds the
-# instance and the api_keys table starts empty. Cognito users, secrets, S3,
-# SQS and ECR do survive, since they have no such proxy.
+# instance and the api_keys table starts empty. Cognito users, secrets and
+# ECR do survive, since they have no such proxy.
 # =============================================================
 
 set -e
