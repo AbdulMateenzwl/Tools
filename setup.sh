@@ -220,6 +220,7 @@ kubectl apply -f services/auth-service/k8s/deployment.yaml > /dev/null
 kubectl apply -f services/auth-service/k8s/service.yaml > /dev/null
 kubectl apply -f services/auth-service/k8s/httproute.yaml > /dev/null
 kubectl apply -f services/auth-service/k8s/hpa.yaml > /dev/null
+kubectl apply -f services/auth-service/k8s/pdb.yaml > /dev/null
 
 # Force a fresh pull of :latest and pick up any endpoint changes.
 kubectl rollout restart deployment/auth-service -n convertx > /dev/null 2>&1 || true
@@ -235,6 +236,7 @@ kubectl apply -f services/golang-conversion-service/k8s/deployment.yaml > /dev/n
 kubectl apply -f services/golang-conversion-service/k8s/service.yaml > /dev/null
 kubectl apply -f services/golang-conversion-service/k8s/httproute.yaml > /dev/null
 kubectl apply -f services/golang-conversion-service/k8s/hpa.yaml > /dev/null
+kubectl apply -f services/golang-conversion-service/k8s/pdb.yaml > /dev/null
 
 kubectl rollout restart deployment/conversion-service -n convertx > /dev/null 2>&1 || true
 

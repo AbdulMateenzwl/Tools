@@ -1,0 +1,23 @@
+# Floor on availability during VOLUNTARY disruption — node drain, cluster
+# upgrade, `kubectl drain`. It does NOT apply to a pod crashing, being
+# deleted directly, or being evicted for exceeding its memory limit; those
+# are involuntary and no budget can stop them.
+#
+# minAvailable is deliberately a PERCENTAGE, not a count. The HPA moves this
+# deployment between 2 and 10 replicas, and a fixed `minAvailable: 2` would
+# mean "allow no disruption at all" whenever the HPA has scaled down to its
+# floor of 2 — blocking node drains entirely. A percentage scales with the
+# replica count instead.
+#
+# 50% with the Deployment's default rolling update (maxUnavailable 25%) means
+# a drain and a rollout cannot combine to take out more than half the pods.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: conversion-service
+  namespace: convertx
+spec:
+  minAvailable: 50%
+  selector:
+    matchLabels:
+      app: conversion-service

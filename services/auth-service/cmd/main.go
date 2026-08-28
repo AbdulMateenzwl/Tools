@@ -7,6 +7,9 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/convertx/auth-service/internal/cognito"
 	"github.com/convertx/auth-service/internal/handler"
@@ -108,9 +111,42 @@ func main() {
 	}
 
 	log.Printf("auth service starting on :%s", port)
-	if err := r.Run(":" + port); err != nil {
-		log.Fatalf("server error: %v", err)
+	serve(r, port)
+}
+
+// serve runs the HTTP server until SIGTERM, then drains in-flight requests
+// before returning. See the equivalent in the conversion service for why
+// gin's r.Run() is not sufficient and why the Deployment's preStop hook is
+// the other, non-optional half of the fix.
+//
+// Draining matters more here than in the conversion service: a severed
+// request may have already written to RDS or called Cognito, so the caller
+// cannot safely assume a dropped registration did not happen.
+func serve(h http.Handler, port string) {
+	srv := &http.Server{Addr: ":" + port, Handler: h}
+
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("server error: %v", err)
+		}
+	}()
+
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
+	<-stop
+	log.Println("shutdown signal received, draining in-flight requests...")
+
+	// Must stay under terminationGracePeriodSeconds (30s) minus the preStop
+	// sleep (5s), or the kubelet SIGKILLs mid-drain.
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	if err := srv.Shutdown(ctx); err != nil {
+		log.Printf("graceful shutdown failed, forcing close: %v", err)
+		_ = srv.Close()
+		return
 	}
+	log.Println("shutdown complete")
 }
 
 func runMigrations(db *pgxpool.Pool, ctx context.Context) error {

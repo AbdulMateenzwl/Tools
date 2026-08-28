@@ -3,7 +3,11 @@ package main
 import (
 	"context"
 	"log"
+	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/convertx/golang-conversion-service/internal/cache"
 	"github.com/convertx/golang-conversion-service/internal/handler"
@@ -46,10 +50,10 @@ func main() {
 
 	convert := v1.Group("/convert")
 	{
-		convert.POST("/json-to-xml",  convertHandler.JSONToXML)
-		convert.POST("/xml-to-json",  convertHandler.XMLToJSON)
-		convert.POST("/json-to-csv",  convertHandler.JSONToCSV)
-		convert.POST("/csv-to-json",  convertHandler.CSVToJSON)
+		convert.POST("/json-to-xml", convertHandler.JSONToXML)
+		convert.POST("/xml-to-json", convertHandler.XMLToJSON)
+		convert.POST("/json-to-csv", convertHandler.JSONToCSV)
+		convert.POST("/csv-to-json", convertHandler.CSVToJSON)
 		convert.POST("/yaml-to-json", convertHandler.YAMLToJSON)
 		convert.POST("/json-to-yaml", convertHandler.JSONToYAML)
 	}
@@ -58,10 +62,10 @@ func main() {
 	{
 		tools.POST("/base64/encode", toolsHandler.Base64Encode)
 		tools.POST("/base64/decode", toolsHandler.Base64Decode)
-		tools.POST("/url/encode",    toolsHandler.URLEncode)
-		tools.POST("/url/decode",    toolsHandler.URLDecode)
-		tools.POST("/jwt/decode",    toolsHandler.JWTDecode)
-		tools.GET("/uuid",           toolsHandler.GenerateUUID)
+		tools.POST("/url/encode", toolsHandler.URLEncode)
+		tools.POST("/url/decode", toolsHandler.URLDecode)
+		tools.POST("/jwt/decode", toolsHandler.JWTDecode)
+		tools.GET("/uuid", toolsHandler.GenerateUUID)
 	}
 
 	port := os.Getenv("PORT")
@@ -70,9 +74,49 @@ func main() {
 	}
 
 	log.Printf("conversion service starting on :%s", port)
-	if err := r.Run(":" + port); err != nil {
-		log.Fatalf("server error: %v", err)
+	serve(r, port)
+}
+
+// serve runs the HTTP server until SIGTERM, then drains in-flight requests
+// before returning.
+//
+// gin's r.Run() cannot do this: it blocks forever with no signal handling, so
+// SIGTERM reaches the Go runtime's default handler and kills the process
+// mid-request. Every rolling restart then severs whatever was in flight — a
+// resilience test measures this directly as curl code 000, a request that got
+// no response at all.
+//
+// The preStop hook in the Deployment is the other half of the fix and is not
+// optional. Endpoint removal is asynchronous with SIGTERM: the kubelet signals
+// the container at the same time the EndpointSlice update starts propagating,
+// so without a preStop delay Kong can still route to a pod that has already
+// begun shutting down. Draining correctly does not help if traffic is still
+// arriving.
+func serve(h http.Handler, port string) {
+	srv := &http.Server{Addr: ":" + port, Handler: h}
+
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("server error: %v", err)
+		}
+	}()
+
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
+	<-stop
+	log.Println("shutdown signal received, draining in-flight requests...")
+
+	// Must stay under terminationGracePeriodSeconds (30s) minus the preStop
+	// sleep (5s), or the kubelet SIGKILLs mid-drain and the point is lost.
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	if err := srv.Shutdown(ctx); err != nil {
+		log.Printf("graceful shutdown failed, forcing close: %v", err)
+		_ = srv.Close()
+		return
 	}
+	log.Println("shutdown complete")
 }
 
 // newCacheStore picks a cache backend from the environment. Conversions are

@@ -13,10 +13,14 @@ Backing services are AWS-emulated through **LocalStack Pro**: PostgreSQL is an R
 `setup.sh` performs the entire 14-step bring-up (namespaces → MetalLB → Kong → LocalStack Pro → bootstrap job → resolve endpoints → docker builds → services → plugins → log shipping → monitoring → port-forwards → health checks). Prefer it over the manual steps in `Readme.md`, which predate the AWS migration and are now substantially wrong.
 
 ```bash
-bash setup.sh          # full bring-up, idempotent for Kong/helm
-bash tests/test.sh     # API test suite (~80 assertions)
-bash teardown.sh       # deletes everything incl. PVs (prompts for confirmation)
+bash setup.sh                   # full bring-up, idempotent for Kong/helm
+bash tests/test.sh              # API test suite (~80 assertions)
+bash tests/load-test.sh         # autoscaling: does the HPA add pods under load
+bash tests/resilience-test.sh   # self-healing + zero-downtime rollout
+bash teardown.sh                # deletes everything incl. PVs (prompts for confirmation)
 ```
+
+The three test scripts cover different things and none subsumes another: `test.sh` asserts on API correctness, `load-test.sh` on scale-out, `resilience-test.sh` on surviving disruption. All three need an active port-forward on `localhost:8080`; the latter two also flush or raise Kong's rate limit, so do not run them concurrently.
 
 **`setup.sh` requires a `.env` at the repo root** (gitignored). Copy the template:
 
@@ -316,6 +320,51 @@ Both services are scaled by a `HorizontalPodAutoscaler` (`services/*/k8s/hpa.yam
 
 Scale-down stabilisation is shortened to 60s (Kubernetes defaults to 300s) so a load test finishes in a watchable time. Production would want the longer window to avoid flapping.
 
+**PodDisruptionBudgets use `minAvailable: 50%`, a percentage rather than a count** (`services/*/k8s/pdb.yaml`). This is forced by the HPA: replicas move between 2 and 10, and a fixed `minAvailable: 2` would mean "allow no disruption whatsoever" any time the HPA has scaled back to its floor of 2 — silently blocking every node drain. A percentage tracks the current replica count instead.
+
+Note what a PDB does *not* cover. It constrains **voluntary** disruption only — `kubectl drain`, node upgrades, the eviction API. A pod that crashes, is deleted directly, or is OOM-killed is an involuntary disruption and no budget can prevent it. `kubectl delete pod` therefore ignores the PDB entirely, which is exactly why the resilience test's kill phase still works.
+
+### Graceful Shutdown
+
+Both services run their HTTP server through a `serve` helper in `cmd/main.go` that traps SIGTERM and calls `http.Server.Shutdown` with a 20s timeout. **Do not revert this to gin's `r.Run()`.** `r.Run` blocks forever with no signal handling, so SIGTERM reaches the Go runtime's default handler and kills the process mid-request — every rolling restart then severs whatever was in flight.
+
+The `preStop` hook in each Deployment (`sleep 5`) is the **other half of the fix and is not optional**. Endpoint removal is asynchronous with SIGTERM: the kubelet signals the container at the same moment the EndpointSlice update begins propagating to Kong. Without the pause the process stops accepting work while Kong is still routing to it, and those requests are dropped no matter how gracefully it drains. Draining correctly does not help if traffic is still arriving.
+
+The three timings are coupled and must stay ordered:
+
+| Setting | Value | Where |
+|---|---|---|
+| `preStop` sleep | 5s | Deployment `lifecycle` |
+| `Shutdown` timeout | 20s | `serve()` in `cmd/main.go` |
+| `terminationGracePeriodSeconds` | 30s | Deployment pod spec |
+
+The grace period must exceed preStop + drain, or the kubelet sends SIGKILL mid-drain and the whole mechanism is pointless. If you raise the drain timeout, raise the grace period with it.
+
+Measured effect — `tests/resilience-test.sh`, same load, before and after the fix:
+
+| | pod kill | rolling restart |
+|---|---|---|
+| `r.Run`, no preStop | 3 dropped / 3,693 | 3 dropped / 4,862 |
+| `Shutdown` + preStop | **0** dropped / 5,451 | **0** dropped / 7,270 |
+
+The dropped requests were all code `000` and all landed within the same one-second window as the disruption — the signature of in-flight connections being severed, not of a pod being unhealthy for a period. Three requests is a small number, but it is the difference between "we restart pods" and "we can restart pods during business hours".
+
+### Resilience Testing
+
+`bash tests/resilience-test.sh [kill|rollout|all]` (default `all`) holds a steady request stream while something disruptive happens, then counts what failed. It complements `load-test.sh`: that one answers "does the HPA add pods under load", this one answers "does traffic survive losing a pod, and does a deploy drop requests".
+
+The number that matters is **curl code `000`** — connection refused, reset, or timeout, i.e. a request that got no response at all. A 5xx is also a failure but a different one: the pod answered, badly.
+
+Three design choices that are load-bearing:
+
+- **Concurrency is 3, not the 12 `load-test.sh` uses.** This test must stay *below* the HPA's 70% threshold. If the autoscaler adds and removes pods mid-rollout, replica counts move for two reasons at once and "did the rollout drop traffic" becomes unanswerable.
+- **A baseline phase runs first and aborts the run if it is not clean.** Without it a failure in the kill phase cannot be attributed to the kill — the port-forward, Kong, or the harness itself are equally plausible. A resilience test that cannot separate "the cluster dropped it" from "my test dropped it" proves nothing.
+- **It flushes the rate limit counter, not just the ceiling.** See Load Testing below.
+
+The kill phase deletes a pod directly, which bypasses the PDB by design (deletion is involuntary disruption). The rollout phase issues `kubectl rollout restart` and waits for `rollout status`.
+
+Verified outcome after the graceful-shutdown fix: **0 dropped requests** across 5,451 requests through a pod kill and 7,270 through a rolling restart, with the replacement pod ready 12s after the kill and the rollout completing in 23s.
+
 ### Load Testing
 
 `bash tests/load-test.sh [DURATION_SECONDS] [CONCURRENCY]` (default 180s / 12) drives the conversion service and reports how the HPA responded, with a scale timeline.
@@ -326,6 +375,9 @@ Two properties of this stack will silently invalidate a naive load test. The scr
   ```bash
   kubectl patch kongplugin rate-limiting-anonymous -n convertx --type=merge -p '{"config":{"day":20}}'
   ```
+  **Raising the ceiling is not sufficient on its own.** The counter lives in Redis DB 1 and persists after the run, so once a load test has spent ~59k requests against your IP, the budget is blown for the rest of the day and *every* later request 429s the moment the limit is restored. `load-test.sh` does not flush it; `resilience-test.sh` does, on entry and exit. Flush by hand with `reset_rate_limit` in `tests/test.sh`, or the `redis-cli ... -n 1 FLUSHDB` in the Tests section above.
+
+  A related trap when writing your own checks: **`curl -sf` treats 429 as a failure**, so a rate-limited gateway is indistinguishable from a dead port-forward and sends you debugging the wrong thing. Check the status code explicitly rather than relying on `-f`.
 - **The cache would absorb the load.** Repeating one payload makes every subsequent request a Redis lookup costing almost no CPU. Each request carries a unique id so it is a guaranteed cache miss that actually runs the converter. A load test here is deliberately the pathological case for the cache — that is the point, since the goal is generating CPU, not measuring hit rate.
 
 Payloads are ~13KB (150-element JSON array), converting in ~6.5ms. Crossing 70% of a 100m request takes roughly 21 req/s across two pods.

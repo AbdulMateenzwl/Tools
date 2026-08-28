@@ -15,6 +15,8 @@ spec:
       labels:
         app: auth-service
     spec:
+      # 20s drain + 5s preStop, with headroom before SIGKILL.
+      terminationGracePeriodSeconds: 30
       containers:
         - name: auth-service
           image: convertx/auth-service:latest
@@ -31,6 +33,17 @@ spec:
             limits:
               cpu: "500m"
               memory: "256Mi"
+          # Endpoint removal is ASYNCHRONOUS with SIGTERM: the kubelet signals
+          # this container at the same moment the EndpointSlice update starts
+          # propagating to Kong. Without this pause the pod stops accepting
+          # work while Kong is still routing to it, and those requests are
+          # dropped no matter how gracefully the process shuts down.
+          # The container keeps serving normally for these 5s; it is the
+          # endpoint propagation we are waiting out, not the process.
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sleep", "5"]
           livenessProbe:
             httpGet:
               path: /api/v1/auth/health
