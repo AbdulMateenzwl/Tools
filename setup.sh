@@ -259,7 +259,7 @@ else
   PW_RULE="s/REDIS_PASSWORD_PLACEHOLDER/$REDIS_SECRET/g"
 fi
 
-for PLUGIN in rate-limiting-plugin rate-limiting-registered-plugin; do
+for PLUGIN in rate-limiting-plugin; do
   sed -e "s/REDIS_HOST_PLACEHOLDER/$REDIS_EP_HOST/g" \
       -e "s/REDIS_PORT_PLACEHOLDER/$REDIS_EP_PORT/g" \
       -e "$PW_RULE" \
@@ -328,6 +328,20 @@ kubectl apply -f infra/monitoring/prometheus-deployment.yaml > /dev/null
 # Dashboards are generated from the JSON on disk rather than checked in as a
 # ConfigMap, so the JSON stays the single source of truth — the same reason
 # bootstrap.sh is built with --from-file in step 5.
+# Grafana admin credentials. Generated once with a random password and left
+# alone on re-runs, so restarting setup does not invalidate a password you
+# have already saved. Read it back with:
+#   kubectl get secret grafana-admin -n monitoring -o jsonpath='{.data.admin-password}' | base64 -d
+if ! kubectl get secret grafana-admin -n monitoring > /dev/null 2>&1; then
+  GRAFANA_PW=$(LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 24)
+  kubectl create secret generic grafana-admin -n monitoring \
+    --from-literal=admin-user=admin \
+    --from-literal=admin-password="$GRAFANA_PW" > /dev/null
+  ok "grafana-admin secret created (password randomised)"
+else
+  ok "grafana-admin secret already exists (password preserved)"
+fi
+
 kubectl create configmap grafana-dashboards \
   --from-file=infra/monitoring/dashboards/ \
   -n monitoring --dry-run=client -o yaml | kubectl apply -f - > /dev/null
@@ -407,7 +421,8 @@ echo "  Log groups:  /convertx/auth-service  /convertx/conversion-service  /conv
 echo ""
 echo "  Autoscaling: kubectl get hpa -n convertx -w"
 echo ""
-echo "  Grafana:     http://localhost:3000  (anonymous viewer; admin/admin to edit)"
+echo "  Grafana:     http://localhost:3000  (user: admin)"
+echo "               password: kubectl get secret grafana-admin -n monitoring -o jsonpath='{.data.admin-password}' | base64 -d"
 echo "  Prometheus:  http://localhost:9090  (targets: /targets)"
 
 CDN_DOMAIN=$(get_secret convertx/cloudfront/domain)

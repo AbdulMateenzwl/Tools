@@ -10,7 +10,7 @@ Backing services are AWS-emulated through **LocalStack Pro**: PostgreSQL is an R
 
 ## Setup, Test, Teardown
 
-`setup.sh` performs the entire 14-step bring-up (namespaces → MetalLB → Kong → LocalStack Pro → bootstrap job → resolve endpoints → docker builds → services → plugins → log shipping → monitoring → port-forwards → health checks). Prefer it over the manual steps in `Readme.md`, which predate the AWS migration and are now substantially wrong.
+`setup.sh` performs the entire 14-step bring-up (namespaces → MetalLB → Kong → LocalStack Pro → bootstrap job → resolve endpoints → docker builds → services → plugins → log shipping → monitoring → port-forwards → health checks). `README.md` is the front-facing guide and is current; this file is the engineering detail behind it.
 
 ```bash
 bash setup.sh                   # full bring-up, idempotent for Kong/helm
@@ -92,7 +92,7 @@ kubectl exec -n localstack $POD -- redis-cli -h 127.0.0.1 -p "${EP##*:}" -a "$PW
 
 **LocalStack Pro image version.** Licences enforce a minimum: `localstack-pro:3.4` is rejected at startup with `Your LocalStack license requires you to use localstack-pro version 4.4.0 or higher`, and the pod CrashLoopBackOffs with a misleading "did not become ready" from `setup.sh`. Releases are CalVer now — `infra/localstack/deployment.yaml` pins `2026.7.5`. Bump the pin rather than switching to `:latest`.
 
-**Helm 4 works.** `Readme.md` says Helm 3.x, but the Kong Gateway Operator chart installs fine under Helm 4.2.4. Helm is a hard prerequisite and is not bundled with Docker Desktop — `brew install helm`.
+**Helm 4 works.** The Kong Gateway Operator chart is documented against Helm 3.x, but installs fine under Helm 4.2.4. Helm is a hard prerequisite and is not bundled with Docker Desktop — `brew install helm`.
 
 **`DBInstanceStatus: available` does not mean RDS is reachable.** LocalStack runs a real postgres on a random internal port and proxies an external one to it. After a `PERSISTENCE=1` restore the instance comes back marked available with a *newly assigned* external port, but the proxy is never re-bound — so the port refuses connections while postgres is running fine internally. It also leaks the previous port, so the assignment drifts on every restart and eventually exhausts the 4510-4514 range.
 
@@ -189,7 +189,9 @@ The user pool `convertx-users` and app client `convertx-api` are created by `boo
 Things that will bite you if you assume the old behaviour:
 
 - **Access tokens carry no `email` claim.** Only ID tokens do. `/me` therefore makes a `GetUser` round trip rather than reading the token. The middleware rejects anything whose `token_use` is not `access`.
-- **Refresh tokens no longer rotate.** The old code deleted the Redis key and issued a new token on every refresh. Cognito's `REFRESH_TOKEN_AUTH` flow reissues only the access token, so the same refresh token stays valid until it expires. `RefreshToken` in the service calls `RevokeToken` **only** when a genuinely different refresh token comes back — revoking unconditionally would lock the user out, since the caller keeps using the token it already has. This is a real reduction in security posture versus the previous rotation; revisit if it matters.
+- **Refresh tokens do not rotate here, and that is a LocalStack gap rather than a config mistake.** `bootstrap.sh` creates the app client with `--refresh-token-rotation '{"Feature":"ENABLED",...}'`, which is the correct setting against real AWS. LocalStack accepts it and reads it back as `ENABLED`, but does **not** implement the behaviour: `REFRESH_TOKEN_AUTH` returns the *same* refresh token. Verified empirically by registering a user, logging in, refreshing, and comparing.
+
+  The service code already handles both worlds. `RefreshToken` calls `RevokeToken` **only** when a genuinely different refresh token comes back, because revoking unconditionally would lock out a caller that is still holding the token it was issued. So on real AWS rotation works and old tokens are revoked; here the call is simply inert. Do not "fix" this by revoking unconditionally.
 - **Verification is RS256 via JWKS**, not a shared HS256 secret. `internal/jwks` fetches and caches the keys, refetching on an unknown `kid` (rate-limited to once a minute) and falling back to a stale key if the IdP is briefly unreachable. `main()` warms the cache at startup so a bad JWKS URL fails loudly there instead of on the first authenticated request.
 - **Role comes from `cognito:groups`**, not a database column. Every new user is added to the `free` group at registration.
 - **Registration is `SignUp` + `AdminConfirmSignUp`.** There is no email delivery here, so users are confirmed admin-side immediately.
@@ -220,7 +222,7 @@ Several manifests contain literal placeholders that `setup.sh` rewrites with `se
 | File | Placeholder |
 |---|---|
 | `infra/localstack/auth-token-secret.yaml` | `LOCALSTACK_AUTH_TOKEN_PLACEHOLDER` |
-| `infra/kong/plugins/rate-limiting-plugin.yaml`, `rate-limiting-registered-plugin.yaml`, `rate-limiting-secret.yaml` | `REDIS_HOST_PLACEHOLDER`, `REDIS_PORT_PLACEHOLDER`, `yourpassword` |
+| `infra/kong/plugins/rate-limiting-plugin.yaml`, `rate-limiting-secret.yaml` | `REDIS_HOST_PLACEHOLDER`, `REDIS_PORT_PLACEHOLDER`, `yourpassword` |
 | `infra/localstack/bootstrap-job.yaml` | `REDIS_PWD_PLACEHOLDER`, `POSTGRES_PWD_PLACEHOLDER`, `KONG_ORIGIN_PLACEHOLDER` |
 
 The Kong rate-limiting plugins are invalid YAML until substituted — `port:` holds a bare placeholder where an integer belongs.
@@ -236,7 +238,7 @@ Plugins are attached **twice**, by two independent mechanisms, and both must sta
 1. A `konghq.com/plugins` annotation listing plugin names on the HTTPRoute (`services/*/k8s/httproute.yaml`)
 2. `KongPluginBinding` CRDs in `infra/kong/plugins/bindings/` referencing the HTTPRoute by name
 
-Active plugins: `cors` (allowlist: localhost:4200, localhost:3000, convertx.io), `rate-limiting-anonymous` (20/day by IP), `request-size-limiting` (1MB), `response-headers` (security headers), `request-id` (correlation-id → `X-Request-ID`), `request-logging` (file-log to stdout, collected from there into CloudWatch — see Log Shipping). `rate-limiting-registered` (100/day by consumer) is defined and applied but not bound to any route.
+Active plugins: `cors` (allowlist: localhost:4200, localhost:3000, convertx.io), `rate-limiting-anonymous` (20/day by IP), `request-size-limiting` (1MB), `response-headers` (security headers), `request-id` (correlation-id → `X-Request-ID`), `request-logging` (file-log to stdout, collected from there into CloudWatch — see Log Shipping). There is no registered-user tier: a `rate-limiting-registered` plugin (100/day by consumer) used to exist but was bound to nothing and has been deleted. Reinstating it is not just re-adding the manifest -- `limit_by: consumer` needs Kong consumers, and identity here is verified by the services' own JWT middleware, so Kong has no consumer to key on. That is a feature, not a config change.
 
 The 1MB request cap is enforced in two places: the Kong plugin, and a `http.MaxBytesReader` middleware in the auth service's `main.go`.
 
@@ -254,6 +256,24 @@ It tails `/var/log/containers/*.log` (containerd CRI format) via three explicit 
 
 Deliberate choices worth knowing before editing the config:
 
+- **`/var/lib/docker/containers` must be mounted, and the parser is `docker`, not `cri`.** This one fails completely silently and cost real time. Docker Desktop's node runs the **Docker** runtime, not containerd (`kubectl get node -o jsonpath='{.items[0].status.nodeInfo.containerRuntimeVersion}'` prints `docker://...`). The tail paths are symlinks two hops deep:
+
+  ```
+  /var/log/containers/X.log -> /var/log/pods/.../0.log
+                            -> /var/lib/docker/containers/<id>/<id>-json.log
+  ```
+
+  Mounting only `/var/log` leaves the final hop dangling. Every tail input then matches **zero files and logs no error at all** -- fluent-bit starts, reports its inputs and outputs as initialised, passes its readiness probe, and ships nothing. `setup.sh` only checks `rollout status`, so it prints `✓ fluent-bit shipping to CloudWatch Logs` while nothing is being shipped. The only symptom is empty log groups, and `tests/test.sh` is what actually catches it.
+
+  Because the real file is Docker's json-file format, the `cri` text parser silently parses nothing either. Both fixes are required together.
+
+  Confirm it is genuinely working by looking for `inotify_fs_add()` lines, which appear once per file actually attached:
+
+  ```bash
+  kubectl logs -n convertx -l app=fluent-bit | grep inotify_fs_add
+  ```
+
+  On a containerd-backed cluster `/var/log/pods/*/0.log` is a real file in CRI format, so the extra mount is harmless and the parser must switch back to `cri`.
 - **No `kubernetes` metadata filter.** Routing is by path glob instead, which avoids needing a ServiceAccount, ClusterRole and API access. Adding the filter for pod labels/annotations means adding RBAC.
 - **`auto_create_group false`.** `bootstrap.sh` creates the groups with 7-day retention; letting fluent-bit create them would silently drop that policy.
 - **`tls Off` with `endpoint` + `port` split.** LocalStack serves CloudWatch Logs over plain HTTP, and the `cloudwatch_logs` plugin takes a bare hostname in `endpoint` with the port as a separate key.
@@ -291,7 +311,13 @@ Things that will bite you if you assume otherwise:
 - **`kong` is intentionally excluded from the Role and the SD config.** The dataplane exposes no Prometheus metrics until Kong's `prometheus` plugin is enabled. Adding it means a matching Role + RoleBinding in `kong` plus a second entry under `namespaces:`.
 - **Both use `emptyDir`.** Prometheus keeps 7 days (matching the CloudWatch log group retention) but loses all of it on pod restart. Grafana's sqlite state is disposable because datasources and dashboards are provisioned from ConfigMaps.
 - **No cache traffic renders as "no traffic", not 0%.** The hit-rate queries divide without a `clamp_min` guard on purpose. Clamping the denominator turns an idle cache into a confident `0%`, which is indistinguishable from every lookup missing — a genuinely misleading reading that cost real debugging time once. A bare `0/0` yields NaN, and the panels are set to say so.
-- **Grafana has anonymous viewer access and admin/admin.** Safe only because it is reachable exclusively through a port-forward — there is no ingress and no Kong route. Move the credentials to a Secret before exposing it anywhere.
+- **Grafana credentials come from the `grafana-admin` Secret, and anonymous access is off.** `setup.sh` generates a random 24-character password on first run and preserves it on re-runs, so restarting setup does not invalidate a password you have saved. Read it back with:
+
+```bash
+kubectl get secret grafana-admin -n monitoring -o jsonpath='{.data.admin-password}' | base64 -d
+```
+
+Anonymous viewer access was previously enabled so the dashboard opened in one click. That is defensible only while the stack is loopback-only, and it silently becomes a public read of every metric the moment an ingress appears, so it is now disabled by default.
 
 **Dashboards are generated from `infra/monitoring/dashboards/*.json` with `--from-file`**, the same single-source-of-truth pattern as `bootstrap.sh`. Editing the ConfigMap directly is pointless; the next `setup.sh` overwrites it. `allowUiUpdates: true`, so you can iterate on a panel in the UI and copy the JSON back into the file.
 

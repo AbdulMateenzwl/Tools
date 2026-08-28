@@ -35,9 +35,29 @@ NORMAL_DAY_LIMIT=20
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
 WORKDIR=$(mktemp -d)
 
+# ── Rate limit counter ──────────────────────────────────────────────────────
+# Raising the plugin's ceiling is not enough on its own: the counter lives in
+# Redis DB 1 and PERSISTS after the run. Spend ~59k requests here and the daily
+# budget is blown, so every later request 429s the moment the limit is restored
+# -- including the next run's own health check, which then looks exactly like a
+# dead port-forward. Flush on the way in and on the way out.
+LOCALSTACK_POD=$(kubectl get pod -n localstack -l app=localstack \
+  -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+REDIS_ENDPOINT=$(kubectl exec -n localstack "$LOCALSTACK_POD" -- \
+  awslocal secretsmanager get-secret-value --secret-id convertx/redis/endpoint \
+  --query SecretString --output text 2>/dev/null)
+REDIS_EP_PORT="${REDIS_ENDPOINT##*:}"
+
+reset_rate_limit() {
+  # ElastiCache here has no AUTH, so no -a flag. See CLAUDE.md.
+  kubectl exec -n localstack "$LOCALSTACK_POD" -- \
+    redis-cli -h 127.0.0.1 -p "$REDIS_EP_PORT" -n 1 FLUSHDB >/dev/null 2>&1
+}
+
 restore() {
   echo ""
   echo -e "${BLUE}Restoring rate limit to ${NORMAL_DAY_LIMIT}/day...${NC}"
+  reset_rate_limit
   kubectl patch kongplugin "$PLUGIN" -n "$NS" --type=merge \
     -p "{\"config\":{\"day\":${NORMAL_DAY_LIMIT}}}" >/dev/null 2>&1 \
     && echo -e "  ${GREEN}✓${NC} rate limit restored" \
@@ -56,10 +76,6 @@ echo "  concurrency: ${CONCURRENCY}"
 echo ""
 
 # ── Preflight ──────────────────────────────────────────────────
-if ! curl -sf "$BASE_URL/api/v1/convert/health" >/dev/null 2>&1; then
-  echo -e "  ${RED}✗${NC} $BASE_URL unreachable — is the port-forward running?"
-  exit 1
-fi
 if ! kubectl get hpa conversion-service -n "$NS" >/dev/null 2>&1; then
   echo -e "  ${RED}✗${NC} no conversion-service HPA found. Run setup.sh first."
   exit 1
@@ -78,8 +94,22 @@ fi
 echo -e "${BLUE}Raising rate limit for the duration of the run...${NC}"
 kubectl patch kongplugin "$PLUGIN" -n "$NS" --type=merge \
   -p '{"config":{"day":100000000}}' >/dev/null
-echo -e "  ${GREEN}✓${NC} raised (restored automatically on exit)"
+reset_rate_limit
+echo -e "  ${GREEN}✓${NC} raised and counter flushed (restored automatically on exit)"
 sleep 5   # let Kong pick up the new plugin config
+
+# Reachability is checked AFTER raising and flushing, and by status code rather
+# than `curl -f`. `-f` treats 429 as a failure, so a previous run's spent budget
+# would report a perfectly healthy gateway as a dead port-forward.
+HEALTH=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
+  "$BASE_URL/api/v1/convert/health" 2>/dev/null)
+if [ "$HEALTH" = "000" ]; then
+  echo -e "  ${RED}✗${NC} $BASE_URL unreachable — is the port-forward running?"
+  exit 1
+elif [ "$HEALTH" != "200" ]; then
+  echo -e "  ${RED}✗${NC} health check returned $HEALTH, expected 200"
+  exit 1
+fi
 
 # ── Build a payload big enough to cost real CPU ────────────────
 # json-to-xml parses and re-serialises, so work scales with document size.

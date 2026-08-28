@@ -7,6 +7,19 @@ data:
   # Parsers are shipped here rather than relying on the image's own
   # /fluent-bit/etc/parsers.conf, so the config is self-contained.
   parsers.conf: |
+    # Docker Desktop's Kubernetes runs the DOCKER runtime (check with
+    # `kubectl get node -o jsonpath='{.items[0].status.nodeInfo.containerRuntimeVersion}'`),
+    # so the on-disk log is Docker's json-file format, NOT the CRI text format.
+    # Using the cri parser against it silently parses nothing.
+    [PARSER]
+        Name        docker
+        Format      json
+        Time_Key    time
+        Time_Format %Y-%m-%dT%H:%M:%S.%L%z
+        Time_Keep   On
+
+    # Kept for a containerd-backed cluster, where /var/log/pods/*/0.log is a
+    # real file in CRI text format rather than a symlink into Docker's store.
     [PARSER]
         Name        cri
         Format      regex
@@ -30,8 +43,13 @@ data:
         HC_Errors_Count  5
         HC_Retry_Failure_Count 5
 
-    # Docker Desktop's Kubernetes uses containerd, so container logs are in
-    # CRI format under /var/log/containers/<pod>_<namespace>_<container>-<id>.log.
+    # Paths under /var/log/containers are SYMLINKS. On the Docker runtime the
+    # chain is two hops:
+    #   /var/log/containers/X.log -> /var/log/pods/.../0.log
+    #                             -> /var/lib/docker/containers/<id>/<id>-json.log
+    # Mounting only /var/log therefore leaves the final hop dangling and every
+    # tail input matches zero files, with NO error logged. The DaemonSet mounts
+    # /var/lib/docker/containers read-only to close that gap.
     # One input per workload keeps routing explicit — no kubernetes metadata
     # filter, which means no RBAC and one less failure mode.
 
@@ -39,7 +57,7 @@ data:
         Name             tail
         Tag              convertx.auth
         Path             /var/log/containers/auth-service-*_convertx_*.log
-        Parser           cri
+        Parser           docker
         DB               /var/log/flb-auth.db
         Mem_Buf_Limit    10MB
         Skip_Long_Lines  On
@@ -49,7 +67,7 @@ data:
         Name             tail
         Tag              convertx.conversion
         Path             /var/log/containers/conversion-service-*_convertx_*.log
-        Parser           cri
+        Parser           docker
         DB               /var/log/flb-conversion.db
         Mem_Buf_Limit    10MB
         Skip_Long_Lines  On
@@ -62,7 +80,7 @@ data:
         Name             tail
         Tag              convertx.kong
         Path             /var/log/containers/dataplane-*_kong_*.log
-        Parser           cri
+        Parser           docker
         DB               /var/log/flb-kong.db
         Mem_Buf_Limit    10MB
         Skip_Long_Lines  On

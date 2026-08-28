@@ -198,8 +198,17 @@ if [ -z "$CLIENT_ID" ] || [ "$CLIENT_ID" = "None" ]; then
     --id-token-validity 15 \
     --refresh-token-validity 7 \
     --token-validity-units '{"AccessToken":"minutes","IdToken":"minutes","RefreshToken":"days"}' \
+    --refresh-token-rotation '{"Feature":"ENABLED","RetryGracePeriodSeconds":30}' \
     --query 'UserPoolClient.ClientId' --output text)
 fi
+# NOTE: LocalStack accepts --refresh-token-rotation and persists it (it reads
+# back as ENABLED), but does NOT implement the behaviour -- REFRESH_TOKEN_AUTH
+# returns the SAME refresh token, verified empirically. The setting is correct
+# against real AWS, where rotation is what makes a stolen refresh token
+# single-use; here it is inert. The service code already handles both cases: it
+# revokes the old token only when a genuinely different one comes back, because
+# revoking unconditionally would lock out a caller that is still holding the
+# token it was issued.
 echo "  ✓ app client $CLIENT_ID"
 
 # Role now comes from group membership, surfaced as the cognito:groups claim.
